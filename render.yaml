@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: ai-lawyer-ipc
+    runtime: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn wsgi:app"
+    preDeployCommand: "python ipc_index_builder.py"
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: PORT
+        value: 10000

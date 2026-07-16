@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Lawyer — IPC Assistant</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header>
+    <h1>⚖️ AI Lawyer</h1>
+    <p>RAG over the Indian Penal Code · retrieval (FAISS) + generation (Gemini)</p>
+  </header>
+
+  <main>
+    <div id="chat" class="chat">
+      <!-- messages render here -->
+    </div>
+
+    <form id="ask-form" class="ask-bar">
+      <textarea id="query" rows="2" placeholder="Ask about an IPC section, e.g. punishment for theft…" required></textarea>
+      <button type="submit">Ask</button>
+    </form>
+
+    <div class="actions">
+      <button id="report-btn" type="button" disabled>Download report (PDF)</button>
+    </div>
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
