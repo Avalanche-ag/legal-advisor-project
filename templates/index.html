@@ -1,32 +1,64 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AI Lawyer — IPC Assistant</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Legal Advisor — IPC Assistant</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css">
 </head>
 <body>
-  <header>
-    <h1>⚖️ AI Lawyer</h1>
-    <p>RAG over the Indian Penal Code · retrieval (FAISS) + generation (Gemini)</p>
-  </header>
+    <nav>
+        <div class="logo">
+            <i class="fa-solid fa-scale-balanced"></i>
+            <span>Legal Advisor</span>
+        </div>
+        <ul>
+            <li><a href="#">Home</a></li>
+            <li><a href="#">About</a></li>
+            <li><a href="#">History</a></li>
+        </ul>
+    </nav>
 
-  <main>
-    <div id="chat" class="chat">
-      <!-- messages render here -->
-    </div>
+    <section class="hero">
+        <div class="hero-icon"><i class="fa-solid fa-scale-balanced"></i></div>
+        <h1>Know Your Rights</h1>
+        <p>Get legal information, understand your rights and explore legal topics across the Indian Penal Code.</p>
 
-    <form id="ask-form" class="ask-bar">
-      <textarea id="query" rows="2" placeholder="Ask about an IPC section, e.g. punishment for theft…" required></textarea>
-      <button type="submit">Ask</button>
-    </form>
+        <form id="ask-form" class="ask-bar search-box">
+            <textarea id="query" rows="2" placeholder="Ask any question — e.g. punishment for theft…" required></textarea>
+            <button type="submit"><i class="fa-solid fa-paper-plane"></i> Ask</button>
+        </form>
+    </section>
 
-    <div class="actions">
-      <button id="report-btn" type="button" disabled>Download report (PDF)</button>
-    </div>
-  </main>
+    <section class="categories">
+        <h2>Popular Categories</h2>
+        <div class="category-grid">
+            <div class="card"><i class="fa-solid fa-people-roof"></i><h3>Family Law</h3></div>
+            <div class="card"><i class="fa-solid fa-house-chimney"></i><h3>Property</h3></div>
+            <div class="card"><i class="fa-solid fa-briefcase"></i><h3>Employment</h3></div>
+            <div class="card"><i class="fa-solid fa-shield-halved"></i><h3>Cyber Crime</h3></div>
+            <div class="card"><i class="fa-solid fa-cart-shopping"></i><h3>Consumer Rights</h3></div>
+        </div>
+    </section>
 
-  <script src="{{ url_for('static', filename='app.js') }}"></script>
+    <section class="chat-area">
+        <h2>Conversations</h2>
+        <div id="chat" class="chat chat-window">
+            <!-- messages render here via app.js -->
+        </div>
+        <div class="actions">
+            <button id="report-btn" type="button" disabled><i class="fa-solid fa-download"></i> Download report (PDF)</button>
+        </div>
+    </section>
+
+    <footer>
+        <p>RAG pipeline · FAISS retrieval + Gemini generation · IPC sections</p>
+    </footer>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>
