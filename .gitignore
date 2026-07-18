@@ -9,5 +9,12 @@ __pycache__/
 venv/
 .venv/
 
+# Generated artifacts
+AI_Lawyer_Report.pdf
+vectorstore/
+
+# Devcontainers (not used in this project)
+.devcontainer/
+
 # Project notes (private)
 brain.md
