@@ -2,19 +2,40 @@
 .env
 .env.local
 
+# macOS
+.DS_Store
+
 # Python
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
 venv/
 .venv/
+ft_venv/
+.pytest_cache/
 
 # Generated artifacts
 AI_Lawyer_Report.pdf
 vectorstore/
+ft/data/
+ft/output/
+ft/merged-*/
 
 # Devcontainers (not used in this project)
 .devcontainer/
 
 # Project notes (private)
 brain.md
+
+# Internal docs (not for public repo)
+docs/
+
+# Tests (dev-only)
+tests/
+conftest.py
+pytest.ini
+
+# Fine-tuning scripts (dev-only)
+scripts/
+ft/

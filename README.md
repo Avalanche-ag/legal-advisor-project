@@ -1,131 +1,143 @@
-<p align="center">
-  <a href="https://github.com/AbhaySingh71/AI-Lawyer-RAG-with-Deepseek">
-    <img src="https://img.shields.io/github/stars/AbhaySingh71/AI-Lawyer-RAG-with-Deepseek?style=social" alt="GitHub Stars">
-  </a>
-</p>
-<body>
-    <h1>⚖️ AI Lawyer - RAG with DeepSeek R1</h1>
-     <p>An AI-powered legal chatbot that leverages Retrieval-Augmented Generation (RAG) with <strong>DeepSeek R1</strong> and <strong>Ollama</strong> for advanced legal reasoning.</p>
-    <p>This chatbot is designed to assist users in understanding complex legal documents, retrieving relevant case laws, and providing structured legal insights. By integrating DeepSeek R1, a sophisticated reasoning model, with the RAG framework, AI Lawyer ensures that responses are grounded in factual legal texts, reducing hallucinations and enhancing reliability. The chatbot can process large legal documents, break them down into meaningful sections, and retrieve the most pertinent information to answer user queries accurately.</p>
-    
-   <h2> Features</h2>
-    <ul>
-        <li>📂 Upload and analyze legal documents (PDFs)</li>
-        <li>🔍 Retrieve relevant legal information using FAISS vector database</li>
-        <li>🤖 Answer legal questions using DeepSeek R1 with Groq</li>
-        <li>📜 Summarize legal documents</li>
-        <li>📄 Generate downloadable AI-generated legal reports</li>
-    </ul>
+# ⚖️ AI Lawyer — IPC Assistant
 
+A retrieval-augmented generation (RAG) pipeline that answers natural-language
+questions about the **Indian Penal Code (IPC)**. The model is constrained to
+the retrieved IPC sections, so every answer cites specific sections — cutting
+down on hallucination and making the system **auditable**.
 
-
-
-https://github.com/user-attachments/assets/003b6247-9faa-4c9a-b9b6-e1311d1d61d5
-
-
-## 📸 Project Demo  
-
-| ![Screenshot 1](utils/photo1.png) | ![Screenshot 2](utils/photo2.png) |  
-|---------------------------------|---------------------------------|  
-| ![Screenshot 3](utils/photo3.png) | ![Screenshot 4](utils/photo4.png) |   
+Built as a single, linear pipeline on purpose: no multi-agent framework, no
+tool-use runtime — just retrieve → generate, with a provider-agnostic
+generator that can later fall back from a fine-tuned model to the Gemini API.
 
 ---
-    
-  <h2>📁 Project Structure</h2>
-    <pre>
-    ├── frontend.py          # Streamlit UI for AI Lawyer
-    ├── rag_pipeline.py      # Retrieval-Augmented Generation pipeline
-    ├── vector_database.py   # FAISS-based vector database
-    ├── requirements.txt     # Python dependencies
-    └── README.md            # Project documentation
-    </pre>
-    
-  <h2>🛠️ Technologies Used</h2>
-    <ul>
-        <li><strong>DeepSeek R1</strong> - AI model for complex reasoning</li>
-        <li><strong>Ollama</strong> - Local LLM hosting</li>
-        <li><strong>LangChain</strong> - AI framework for LLM applications</li>
-        <li><strong>Streamlit</strong> - Frontend UI for chatbot</li>
-        <li><strong>FAISS</strong> - Vector search for document retrieval</li>
-        <li><strong>pdfplumber</strong> - PDF document processing</li>
-    </ul>
-    
-   <h2>⚙️ Installation & Setup</h2>
 
-<h3>1️⃣ Clone the Repository</h3>
-<pre>
-git clone https://github.com/AbhaySingh71/AI-Lawyer-RAG-with-Deepseek.git
-cd AI-Lawyer-RAG-with-Deepseek
-</pre>
+## How it works
 
-<h3>2️⃣ Set Up the Virtual Environment</h3>
-<pre>
-python -m venv venv
-source venv/bin/activate  # On macOS/Linux
-venv\Scripts\activate  # On Windows
-</pre>
+```mermaid
+flowchart LR
+    U[User question] -->|"POST /ask JSON {query}"| APP[Flask app.py]
+    APP --> RET[IPC retriever<br/>ipc_retriever.py]
+    RET --> CH[(FAISS<br/>vectorstore/ipc_db<br/>575 IPC sections)]
+    CH -->|top-3 sections| RET
+    RET --> GEN[Generator<br/>generator.py]
+    GEN --> GEM["Gemini 2.5 Flash Lite"]
+    GEM --> A[Answer + citations]
+    A -->|"JSON {answer, sections}"| U
+    U -.optional.-> RPT[GET /report] --> PDF[PDF transcript]
+```
 
-<h3>3️⃣ Install Dependencies</h3>
-<pre>
+1. User submits a question through the Flask `/ask` endpoint.
+2. `ipc_retriever.py` runs a similarity search against the FAISS index built
+   from `data/ipc.json` (575 IPC sections, embedded with
+   `sentence-transformers/all-MiniLM-L6-v2`).
+3. `rag_pipeline.py` formats the retrieved sections as context and calls
+   `generator.generate(...)`.
+4. `generator.py` calls Gemini via the Google Generative AI API and returns
+   a grounded answer.
+5. The Flask route returns `{answer, sections[]}`; the frontend renders the
+   answer plus per-section citation cards.
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Backend | Flask + Gunicorn |
+| RAG Orchestration | LangChain 0.3.x |
+| Vector Store | FAISS (flat L2 index) |
+| Embeddings | `sentence-transformers/all-MiniLM-L6-v2` (384-dim) |
+| Generation | Google Gemini 2.5 Flash Lite (free-tier API) |
+| Reporting | ReportLab (PDF download endpoint) |
+| Frontend | Vanilla HTML + CSS + JavaScript (no framework) |
+| Deploy | Render (free web service, `render.yaml`) |
+
+---
+
+## Project structure
+
+```
+.
+├── app.py                  # Flask routes: / , /ask , /report
+├── wsgi.py                 # gunicorn entry
+├── rag_pipeline.py         # IPC QA prompt + answer_ipc_query + PDF report
+├── generator.py            # provider-agnostic generate() with fallback
+├── ipc_retriever.py        # retrieve_ipc_sections(query, k=3)
+├── ipc_index_builder.py    # builds FAISS index from data/ipc.json
+├── vector_database.py      # lazy embedding-model singleton
+├── data/ipc.json           # 575 IPC sections
+├── templates/index.html    # chat page
+├── static/style.css        # glassmorphism dark theme
+├── static/app.js           # fetch /ask, render Q&A + citations
+├── requirements.txt        # pinned dependencies
+├── .env.example            # GEMINI_API_KEY + reserved fine-tuned slots
+└── render.yaml             # one-click Render deploy
+```
+
+---
+
+## Quickstart
+
+```bash
+cp .env.example .env         # paste your GEMINI_API_KEY (from aistudio.google.com/apikey)
+python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-</pre>
+python ipc_index_builder.py   # builds vectorstore/ipc_db/ (one-time, ~10s)
+flask --app app run            # open http://127.0.0.1:5000
+```
 
- <h2>Deployment on Streamlit Cloud</h2>
-<h3>1️⃣ Push code to GitHub</h3>
-<pre>
-git add .
-git commit -m "Initial commit"
-git push origin main
-</pre>
+Sample questions to verify:
 
-<h3>2️⃣ Deploy on Streamlit</h3>
-<ul>
-  <li>Go to <a href="https://share.streamlit.io/">Streamlit Cloud</a> → Deploy a new app.</li>
-  <li>Set <code>GROQ_API_KEY</code> in Streamlit Secrets.</li>
-  <li>Click <strong>Deploy!</strong> 🎉</li>
-</ul>
-
-  <h2>🚀 Usage</h2>
-    <ol>
-        <li>Run the Streamlit application:</li>
-        <pre><code>streamlit run frontend.py</code></pre>
-        <li>Upload a legal document (PDF)</li>
-        <li>Ask legal questions and get AI-powered responses</li>
-        <li>Download AI-generated legal reports</li>
-    </ol>
-    
-   <h2>📜 How It Works</h2>
-    <ol>
-        <li><strong>Upload PDF:</strong> Documents are uploaded and processed.</li>
-        <li><strong>Vector Database:</strong> FAISS indexes the document text.</li>
-        <li><strong>Query Handling:</strong> AI retrieves relevant information.</li>
-        <li><strong>LLM Response:</strong> DeepSeek R1 generates answers.</li>
-        <li><strong>Report Generation:</strong> AI generates a downloadable PDF report.</li>
-    </ol>
-
-## 🌐 Deployed Version
-
-The app is deployed on **Streamlit**! You can check out the live version and explore the analysis on your own:[Streamlit App](https://ai-lawyer-rag-with-deepseek.streamlit.app/).
-
-    
-  <h2>🎯 Future Improvements</h2>
-    <ul>
-        <li>📝 Add support for multiple document formats (DOCX, TXT)</li>
-        <li>⚡ Improve response speed and accuracy</li>
-        <li>🔗 Integrate legal databases for richer context</li>
-    </ul>
-    
- <h2>📬 Contact Us</h2>
-<p>Have questions or need support? Reach out to us at:</p>
-<ul>
-  <li>📧 <a href="mailto:abhaysingh71711@gmail.com">abhaysingh71711@gmail.com</a></li>
-</ul>
+| Question | Expected sections |
+|---|---|
+| `punishment for theft` | §378, §379 |
+| `punishment for murder` | §302 |
+| `punishment for cheating` | §417, §418 |
 
 ---
 
-<h2>🌐 Connect With Me</h2>
-<p align="center">
-  <a href="https://github.com/abhaysingh71" target="_blank">🐙 GitHub</a> |
-  <a href="https://www.linkedin.com/in/abhay-singh-050a5b293/" target="_blank">🔗 LinkedIn</a> |
-  <a href="https://x.com/AbhaySingh71711" target="_blank">🐦 Twitter</a>
-</p>
+## Deployment
+
+The app is configured for one-click deploy on Render (free tier):
+
+1. Push this repo to GitHub.
+2. Go to https://render.com/deploy and paste the repo URL.
+3. Render reads `render.yaml` and asks for the `GEMINI_API_KEY` secret.
+4. The `preDeployCommand` rebuilds the FAISS index automatically on each deploy.
+
+---
+
+## Known limitations
+
+- **No persistent conversation store.** The Flask app keeps the last 50 turns
+  in module-level lists. On restart or with multiple gunicorn workers, the
+  transcript is lost.
+- **No authentication.** Anyone with the URL can use the app and hit the
+  Gemini quota.
+- **IPC-only knowledge base.** Other Indian Bare Acts (CrPC, Evidence Act,
+  etc.) are not indexed yet.
+- **No re-ranking or score thresholds.** Retrieval uses plain similarity
+  search with k=3.
+- **No tests.** A smoke test for retrieval would be a good first contribution.
+
+---
+
+## Roadmap
+
+- [ ] **Fine-tuned SLM as primary model.** Fine-tune a Qwen2.5-3B-Instruct
+  model on Indian Bare Acts + question/section pairs. Slot its factory into
+  `generator.PROVIDERS` ahead of Gemini — the rest of the pipeline stays
+  unchanged.
+- [ ] **Persistent conversation store.** Replace the in-memory lists with
+  Flask sessions or SQLite.
+- [ ] **Expand the corpus.** Add CrPC, IEA, and landmark judgments to the
+  FAISS index.
+- [ ] **Test suite.** `pytest` smoke tests for retrieval, generation, and
+  the `/ask` route.
+
+---
+
+## Acknowledgements
+
+- IPC section dataset adapted from open Indian Penal Code data.
+- Frontend design uses Google Poppins + Font Awesome via CDN.
