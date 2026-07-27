@@ -82,6 +82,11 @@ form.addEventListener("submit", async (e) => {
       return;
     }
 
+    if (data.error) {
+      addMessage("Error: " + data.error, "ai error");
+      return;
+    }
+
     addMessage(data.answer, "ai");
     addCitations(data.sections);
     reportBtn.disabled = false;

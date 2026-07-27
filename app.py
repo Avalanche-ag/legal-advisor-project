@@ -28,7 +28,10 @@ def ask():
     try:
         answer, sections = answer_ipc_query(query)
     except Exception as exc:
-        return jsonify(error=f"Generation failed: {exc}"), 502
+        # Return 200 with an error field in the JSON body. Using 5xx makes
+        # Render's load balancer replace our JSON response with its own HTML
+        # 502 page, which the frontend cannot parse as JSON.
+        return jsonify(answer=None, sections=[], error=f"Generation failed: {exc}"), 200
 
     _last_query.append(query)
     _last_answer.append(answer)
@@ -42,7 +45,7 @@ def ask():
 @app.route("/report")
 def report():
     if not _last_query:
-        return jsonify(error="No conversation to export yet."), 400
+        return jsonify(error="No conversation to export yet."), 200
     path = generate_report(list(_last_query), list(_last_answer))
     return send_file(
         os.path.abspath(path),
