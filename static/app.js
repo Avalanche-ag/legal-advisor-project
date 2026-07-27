@@ -59,9 +59,26 @@ form.addEventListener("submit", async (e) => {
 
     loader.remove();
 
-    const data = await res.json();
     if (!res.ok) {
-      addMessage("Error: " + (data.error || "Something went wrong."), "ai error");
+      let msg = "Server error (" + res.status + ")";
+      try {
+        const errData = await res.json();
+        msg = "Error: " + (errData.error || msg);
+      } catch (_) {
+        // Render returns an HTML error page on 502; res.json() fails.
+        if (res.status === 502) {
+          msg = "The AI model is unavailable. Rare or rate-limited. Try again in a minute.";
+        }
+      }
+      addMessage(msg, "ai error");
+      return;
+    }
+
+    let data;
+    try {
+      data = await res.json();
+    } catch (_) {
+      addMessage("The server returned an unexpected response. Please try again.", "ai error");
       return;
     }
 

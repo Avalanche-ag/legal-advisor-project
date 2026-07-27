@@ -22,6 +22,8 @@ def _gemini() -> BaseChatModel:
         model="gemini-2.5-flash-lite",
         google_api_key=os.getenv("GEMINI_API_KEY"),
         temperature=0.3,
+        request_timeout=30,   # fail fast instead of hanging >60s on Render
+        max_retries=2,        # don't retry 5× with exponential backoff
     )
 
 
