@@ -3,14 +3,35 @@ services:
     name: ai-lawyer-ipc
     runtime: python
     plan: free
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "gunicorn wsgi:app --timeout 120"
-    preDeployCommand: "python scripts/build_index.py && python scripts/init_db.py"
+    buildCommand: "pip install -r requirements-render.txt"
+    startCommand: "gunicorn wsgi:app --workers 1 --threads 4 --timeout 120 --max-requests 500 --max-requests-jitter 50"
+    preDeployCommand: "python scripts/build_index.py --format numpy && python scripts/init_db.py"
     envVars:
       - key: GEMINI_API_KEY
         sync: false
       - key: SECRET_KEY
         generateValue: true
+      # --- lightweight runtime profile (fits in 512 MB) ---
+      - key: VECTOR_BACKEND
+        value: numpy
+      - key: EMBEDDING_BACKEND
+        value: onnx
+      - key: GENERATION_BACKEND
+        value: rest
+      - key: MALLOC_ARENA_MAX
+        value: "2"
+      # --- MySQL (see README: Aiven / TiDB Cloud free tiers) ---
+      - key: MYSQL_HOST
+        sync: false
+      - key: MYSQL_PORT
+        value: "3306"
+      - key: MYSQL_USER
+        sync: false
+      - key: MYSQL_PASSWORD
+        sync: false
+      - key: MYSQL_DATABASE
+        value: ipc_app
+      # --- initial admin ---
       - key: ADMIN_EMAIL
         value: admin@local.dev
       - key: ADMIN_PASSWORD

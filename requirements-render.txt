@@ -1,0 +1,38 @@
+# Lightweight runtime for memory-constrained hosts (Render free tier, 512 MB).
+#
+# Measured peak RSS with this set: ~300 MB (vs ~600 MB for the torch stack).
+# Uses the NumPy vector index + ONNX embeddings + REST generation, so no
+# torch / transformers / sentence-transformers / chromadb / langchain.
+#
+#   pip install -r requirements-render.txt
+#   python scripts/build_index.py --format numpy
+#
+# Environment:
+#   VECTOR_BACKEND=numpy
+#   EMBEDDING_BACKEND=onnx
+#   GENERATION_BACKEND=rest
+
+Flask==3.0.3
+Flask-Login==0.6.3
+Flask-SQLAlchemy==3.1.1
+SQLAlchemy==2.0.51
+Werkzeug==3.1.8
+Jinja2==3.1.6
+MarkupSafe==3.0.3
+itsdangerous==2.2.0
+click==8.4.2
+blinker==1.9.0
+greenlet==3.5.3
+gunicorn==23.0.0
+python-dotenv==1.0.1
+PyMySQL==1.2.4
+requests==2.34.2
+
+# Embeddings without torch
+numpy>=1.26,<3
+onnxruntime>=1.17,<2
+tokenizers>=0.20,<1
+huggingface-hub>=0.26
+
+# PDF report
+reportlab==4.3.1

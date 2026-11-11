@@ -52,3 +52,6 @@ scripts/fix_dataset.py
 scripts/fix_dataset_targeted.py
 scripts/generate_dataset.py
 scripts/split_dataset.py
+
+# Lightweight vector index artifact
+vectorstore/ipc_index.npz
