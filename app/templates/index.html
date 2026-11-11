@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Legal Advisor — IPC Assistant{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <div class="hero-icon"><i class="fa-solid fa-scale-balanced"></i></div>
+  <h1>Know Your Rights</h1>
+  <p>Get legal information, understand your rights and explore legal topics across the Indian Penal Code.</p>
+
+  {% if current_user.is_authenticated %}
+  <form id="ask-form" class="ask-bar search-box" data-authenticated="1">
+    <textarea id="query" rows="2" placeholder="Ask any question — e.g. punishment for theft…" required></textarea>
+    <button type="submit"><i class="fa-solid fa-paper-plane"></i> Ask</button>
+  </form>
+  {% else %}
+  <div class="auth-notice">
+    <p><i class="fa-solid fa-lock"></i> Please log in to ask legal questions.</p>
+    <a href="{{ url_for('auth.login_page') }}" class="btn-primary">Login</a>
+    <a href="{{ url_for('auth.register_page') }}" class="btn-ghost">Create an account</a>
+  </div>
+  {% endif %}
+</section>
+
+<section class="categories">
+  <h2>Popular Categories</h2>
+  <div class="category-grid">
+    <div class="card"><i class="fa-solid fa-people-roof"></i><h3>Family Law</h3></div>
+    <div class="card"><i class="fa-solid fa-house-chimney"></i><h3>Property</h3></div>
+    <div class="card"><i class="fa-solid fa-briefcase"></i><h3>Employment</h3></div>
+    <div class="card"><i class="fa-solid fa-shield-halved"></i><h3>Cyber Crime</h3></div>
+    <div class="card"><i class="fa-solid fa-cart-shopping"></i><h3>Consumer Rights</h3></div>
+  </div>
+</section>
+
+<section class="chat-area">
+  <h2>Conversations</h2>
+  <div id="chat" class="chat chat-window">
+    <!-- messages render here via app.js -->
+  </div>
+  {% if current_user.is_authenticated %}
+  <div class="actions">
+    <button id="report-btn" type="button"><i class="fa-solid fa-download"></i> Download report (PDF)</button>
+  </div>
+  {% endif %}
+</section>
+
+{% if current_user.is_authenticated %}
+<aside id="history-panel" class="history-panel" hidden>
+  <header>
+    <h3><i class="fa-solid fa-clock-rotate-left"></i> My History</h3>
+    <button type="button" id="history-close" class="icon-btn" aria-label="Close">&times;</button>
+  </header>
+  <div id="history-list" class="history-list">
+    <p class="muted">Loading…</p>
+  </div>
+</aside>
+{% endif %}
+{% endblock %}

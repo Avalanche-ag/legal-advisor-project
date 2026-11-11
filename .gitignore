@@ -11,9 +11,13 @@ __pycache__/
 *.pyo
 *.pyd
 venv/
+venv 2/
 .venv/
 ft_venv/
 .pytest_cache/
+
+# Instance data (SQLite database, secrets)
+instance/
 
 # Generated artifacts
 AI_Lawyer_Report.pdf
@@ -37,5 +41,14 @@ conftest.py
 pytest.ini
 
 # Fine-tuning scripts (dev-only)
-scripts/
 ft/
+
+# Fine-tuning / dataset tooling (dev-only, not part of the running app)
+scripts/check_dataset.py
+scripts/eval_model.py
+scripts/finetune.py
+scripts/finetune_mps.py
+scripts/fix_dataset.py
+scripts/fix_dataset_targeted.py
+scripts/generate_dataset.py
+scripts/split_dataset.py

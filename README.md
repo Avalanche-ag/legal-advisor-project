@@ -1,56 +1,78 @@
 # ⚖️ AI Lawyer — IPC Assistant
 
 A retrieval-augmented generation (RAG) pipeline that answers natural-language
-questions about the **Indian Penal Code (IPC)**. The model is constrained to
-the retrieved IPC sections, so every answer cites specific sections — cutting
-down on hallucination and making the system **auditable**.
+questions about the **Indian Penal Code (IPC)**, with user accounts, role-based
+access control, and persistent query logging.
 
-Built as a single, linear pipeline on purpose: no multi-agent framework, no
-tool-use runtime — just retrieve → generate, with a provider-agnostic
-generator that can later fall back from a fine-tuned model to the Gemini API.
+Answers are grounded in retrieved IPC sections, so every response cites
+specific section numbers — cutting down hallucination and making the system
+**auditable**.
 
 ---
 
-## How it works
+## Features
+
+| Feature | Details |
+|---|---|
+| **RAG Q&A** | ChromaDB retrieval (top-3 IPC sections) → Gemini 2.5 Flash Lite grounded answer |
+| **Authentication** | Session login with hashed passwords (`Flask-Login` + `werkzeug`) |
+| **RBAC** | `admin` and `user` roles; admin-only dashboard and APIs |
+| **Query logging** | Every request persisted with prompt, response, citations, latency, status, error |
+| **User history** | Paginated personal query history (`/api/history`) |
+| **Admin dashboard** | System metrics, user management, system-wide logs |
+| **PDF report** | Export your successful queries as a PDF transcript |
+
+---
+
+## Architecture
 
 ```mermaid
-flowchart LR
-    U[User question] -->|"POST /ask JSON {query}"| APP[Flask app.py]
-    APP --> RET[IPC retriever<br/>ipc_retriever.py]
-    RET --> CH[(FAISS<br/>vectorstore/ipc_db<br/>575 IPC sections)]
-    CH -->|top-3 sections| RET
-    RET --> GEN[Generator<br/>generator.py]
-    GEN --> GEM["Gemini 2.5 Flash Lite"]
-    GEM --> A[Answer + citations]
-    A -->|"JSON {answer, sections}"| U
-    U -.optional.-> RPT[GET /report] --> PDF[PDF transcript]
+flowchart TB
+    subgraph Client
+        UI["index.html · app.js"]
+        ADM["admin.html · admin.js"]
+    end
+
+    subgraph Flask["Flask app package"]
+        AUTH["auth: /register /login /logout /api/me"]
+        MAIN["main: / /ask /report /api/history"]
+        ADMIN["admin: /admin/dashboard /api/admin/*"]
+        MODELS["models.py: User · QueryLog"]
+    end
+
+    subgraph Services
+        RAG["services/rag.py"]
+        RET["services/retriever.py"]
+        EMB["services/embeddings.py"]
+        GEN["services/generator.py"]
+    end
+
+    DB[("SQLite<br/>instance/ipc_app.db")]
+    CH[("ChromaDB<br/>vectorstore/ipc_chroma")]
+    API["Google Gemini API"]
+
+    UI --> MAIN
+    ADM --> ADMIN
+    AUTH --> MODELS
+    MAIN --> MODELS
+    ADMIN --> MODELS
+    MODELS --> DB
+    MAIN --> RAG
+    RAG --> RET
+    RET --> EMB
+    RET --> CH
+    RAG --> GEN
+    GEN --> API
 ```
 
-1. User submits a question through the Flask `/ask` endpoint.
-2. `ipc_retriever.py` runs a similarity search against the FAISS index built
-   from `data/ipc.json` (575 IPC sections, embedded with
-   `sentence-transformers/all-MiniLM-L6-v2`).
-3. `rag_pipeline.py` formats the retrieved sections as context and calls
-   `generator.generate(...)`.
-4. `generator.py` calls Gemini via the Google Generative AI API and returns
-   a grounded answer.
-5. The Flask route returns `{answer, sections[]}`; the frontend renders the
-   answer plus per-section citation cards.
+**Request flow for one question**
 
----
-
-## Tech Stack
-
-| Layer | Technology |
-|---|---|
-| Backend | Flask + Gunicorn |
-| RAG Orchestration | LangChain 0.3.x |
-| Vector Store | FAISS (flat L2 index) |
-| Embeddings | `sentence-transformers/all-MiniLM-L6-v2` (384-dim) |
-| Generation | Google Gemini 2.5 Flash Lite (free-tier API) |
-| Reporting | ReportLab (PDF download endpoint) |
-| Frontend | Vanilla HTML + CSS + JavaScript (no framework) |
-| Deploy | Render (free web service, `render.yaml`) |
+1. `POST /ask` (login required) validates the query.
+2. `services/rag.answer_ipc_query()` embeds the query and retrieves the top-3
+   IPC sections from ChromaDB.
+3. The sections are formatted into the prompt template and sent to Gemini.
+4. The answer plus citation payload is returned and written to `QueryLog`
+   together with latency and status (`SUCCESS` / `FAILED`).
 
 ---
 
@@ -58,86 +80,151 @@ flowchart LR
 
 ```
 .
-├── app.py                  # Flask routes: / , /ask , /report
-├── wsgi.py                 # gunicorn entry
-├── rag_pipeline.py         # IPC QA prompt + answer_ipc_query + PDF report
-├── generator.py            # provider-agnostic generate() with fallback
-├── ipc_retriever.py        # retrieve_ipc_sections(query, k=3)
-├── ipc_index_builder.py    # builds FAISS index from data/ipc.json
-├── vector_database.py      # lazy embedding-model singleton
-├── data/ipc.json           # 575 IPC sections
-├── templates/index.html    # chat page
-├── static/style.css        # glassmorphism dark theme
-├── static/app.js           # fetch /ask, render Q&A + citations
-├── requirements.txt        # pinned dependencies
-├── .env.example            # GEMINI_API_KEY + reserved fine-tuned slots
-└── render.yaml             # one-click Render deploy
+├── app/
+│   ├── __init__.py          # create_app() factory, db, login manager
+│   ├── models.py            # User, QueryLog
+│   ├── auth/                # register/login/logout/api-me + @admin_required
+│   ├── main/                # chat page, /ask, /report, /api/history
+│   ├── admin/               # dashboard page + admin management APIs
+│   ├── services/            # embeddings, retriever, generator, RAG, PDF
+│   ├── templates/           # base, index, login, register, admin
+│   └── static/              # app.js, admin.js, style.css
+├── data/ipc.json            # 575 IPC sections (source dataset)
+├── instance/                # SQLite database (gitignored, created at runtime)
+├── notebooks/evaluation.ipynb
+├── scripts/
+│   ├── build_index.py       # build the Chroma index
+│   ├── init_db.py           # create tables + seed admin
+│   └── verify_rbac.py       # end-to-end RBAC/logging verification
+├── requirements.txt
+├── render.yaml
+└── wsgi.py
 ```
+
+---
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| Backend | Flask 3, Gunicorn |
+| Auth | Flask-Login, Werkzeug password hashing |
+| Persistence | Flask-SQLAlchemy + SQLite |
+| RAG orchestration | LangChain 0.3 |
+| Vector store | ChromaDB (persistent, HNSW) |
+| Embeddings | `sentence-transformers/all-MiniLM-L6-v2` (384-dim) |
+| Generation | Google Gemini 2.5 Flash Lite |
+| Reporting | ReportLab |
+| Frontend | Vanilla HTML/CSS/JS |
+| Deploy | Render (`render.yaml`) |
 
 ---
 
 ## Quickstart
 
 ```bash
-cp .env.example .env         # paste your GEMINI_API_KEY (from aistudio.google.com/apikey)
+git clone https://github.com/Avalanche-ag/legal-advisor-project.git
+cd legal-advisor-project
+
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-python ipc_index_builder.py   # builds vectorstore/ipc_db/ (one-time, ~10s)
-flask --app app run            # open http://127.0.0.1:5000
+
+cp .env.example .env            # add GEMINI_API_KEY and SECRET_KEY
+
+python scripts/build_index.py   # builds vectorstore/ipc_chroma (one-time)
+python scripts/init_db.py       # creates instance/ipc_app.db + admin user
+
+flask --app wsgi run --port 5050
 ```
 
-Sample questions to verify:
+Open <http://127.0.0.1:5050>, register a user, and ask a question.
 
-| Question | Expected sections |
-|---|---|
-| `punishment for theft` | §378, §379 |
-| `punishment for murder` | §302 |
-| `punishment for cheating` | §417, §418 |
+Default admin (override with `ADMIN_EMAIL` / `ADMIN_USERNAME` / `ADMIN_PASSWORD`):
+
+```
+email:    admin@local.dev
+password: admin12345
+```
+
+> Change these credentials before deploying publicly — `.env.example`
+> documents all three variables.
 
 ---
 
-## Deployment
+## API
 
-The app is configured for one-click deploy on Render (free tier):
+| Method | Path | Access | Purpose |
+|---|---|---|---|
+| `GET` | `/` | public | Chat page |
+| `POST` | `/ask` | user | Ask a question (logged) |
+| `GET` | `/report` | user | PDF of your successful queries |
+| `GET` | `/api/history` | user | Paginated personal history |
+| `POST` | `/register` | public | Create a standard user |
+| `POST` | `/login` | public | Start a session |
+| `GET` | `/logout` | user | End the session |
+| `GET` | `/api/me` | user | Current profile |
+| `GET` | `/admin/dashboard` | admin | Admin UI |
+| `GET` | `/api/admin/users` | admin | All users + query counts |
+| `PATCH` | `/api/admin/users/<id>/role` | admin | Promote/demote |
+| `PATCH` | `/api/admin/users/<id>/toggle-status` | admin | Activate/deactivate |
+| `GET` | `/api/admin/logs` | admin | System logs (`?status=`, `?sort=latency`) |
+| `GET` | `/api/admin/stats` | admin | Totals, success rate, avg latency |
 
-1. Push this repo to GitHub.
-2. Go to https://render.com/deploy and paste the repo URL.
-3. Render reads `render.yaml` and asks for the `GEMINI_API_KEY` secret.
-4. The `preDeployCommand` rebuilds the FAISS index automatically on each deploy.
+Unauthenticated API calls return **401 JSON**; non-admin calls to admin routes
+return **403**.
+
+---
+
+## Data model
+
+`instance/ipc_app.db` holds two tables:
+
+| Table | Key columns |
+|---|---|
+| `user` | `id`, `email` (unique), `username` (unique), `password_hash`, `role`, `is_active`, `created_at` |
+| `query_log` | `id`, `user_id` → `user.id` (cascade), `query_text`, `response_text`, `retrieved_sections` (JSON), `status`, `error_message`, `latency_ms`, `created_at` |
+
+The vector store is a separate ChromaDB SQLite database at
+`vectorstore/ipc_chroma/` (575 embeddings, one per IPC section).
+
+---
+
+## Deployment (Render)
+
+`render.yaml` is preconfigured:
+
+```yaml
+buildCommand:    pip install -r requirements.txt
+preDeployCommand: python scripts/build_index.py && python scripts/init_db.py
+startCommand:    gunicorn wsgi:app --timeout 120
+```
+
+Set these environment variables in the Render dashboard:
+`GEMINI_API_KEY`, `SECRET_KEY` (auto-generated), `ADMIN_EMAIL`, `ADMIN_PASSWORD`.
+
+> **Note:** Render's free tier provides ephemeral disk and 512 MB RAM. The
+> `torch` + `sentence-transformers` stack needs roughly 600 MB, so the free
+> instance can exceed its memory limit on the first request. Use a paid
+> instance (2 GB) or a platform with more RAM for the retrieval layer.
 
 ---
 
 ## Known limitations
 
-- **No persistent conversation store.** The Flask app keeps the last 50 turns
-  in module-level lists. On restart or with multiple gunicorn workers, the
-  transcript is lost.
-- **No authentication.** Anyone with the URL can use the app and hit the
-  Gemini quota.
-- **IPC-only knowledge base.** Other Indian Bare Acts (CrPC, Evidence Act,
-  etc.) are not indexed yet.
-- **No re-ranking or score thresholds.** Retrieval uses plain similarity
-  search with k=3.
-- **No tests.** A smoke test for retrieval would be a good first contribution.
+- **Ephemeral SQLite on free hosting** — `instance/ipc_app.db` is recreated on
+  each deploy, so users and logs do not survive a redeploy.
+- **Single-process transcript assumptions** — with multiple Gunicorn workers,
+  each worker has its own SQLite connection but the database itself is shared;
+  avoid SQLite on a network filesystem.
+- **IPC-only corpus** — CrPC, Evidence Act and other Bare Acts are not indexed.
+- **No rate limiting** — an authenticated user can exhaust the Gemini quota.
+- **No password reset / email verification** flows yet.
 
 ---
 
 ## Roadmap
 
-- [ ] **Fine-tuned SLM as primary model.** Fine-tune a Qwen2.5-3B-Instruct
-  model on Indian Bare Acts + question/section pairs. Slot its factory into
-  `generator.PROVIDERS` ahead of Gemini — the rest of the pipeline stays
-  unchanged.
-- [ ] **Persistent conversation store.** Replace the in-memory lists with
-  Flask sessions or SQLite.
-- [ ] **Expand the corpus.** Add CrPC, IEA, and landmark judgments to the
-  FAISS index.
-- [ ] **Test suite.** `pytest` smoke tests for retrieval, generation, and
-  the `/ask` route.
-
----
-
-## Acknowledgements
-
-- IPC section dataset adapted from open Indian Penal Code data.
-- Frontend design uses Google Poppins + Font Awesome via CDN.
+- [ ] Fine-tuned legal SLM as the primary provider (Gemini stays as fallback)
+- [ ] PostgreSQL + Alembic migrations for durable, multi-worker deployments
+- [ ] Expand the corpus (BNS, BNSS, BSA, landmark judgments)
+- [ ] Rate limiting and audit export

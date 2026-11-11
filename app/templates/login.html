@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Login — Legal Advisor{% endblock %}
+
+{% block content %}
+<section class="auth-shell">
+  <div class="auth-card">
+    <h1><i class="fa-solid fa-right-to-bracket"></i> Login</h1>
+    <p class="muted">Sign in to ask IPC questions and keep your query history.</p>
+
+    <form id="login-form" class="auth-form" novalidate>
+      <label for="login-email">Email</label>
+      <input id="login-email" name="email" type="email" autocomplete="email" required>
+
+      <label for="login-password">Password</label>
+      <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+
+      <button type="submit" class="btn-primary">Login</button>
+      <p id="login-error" class="form-error" hidden></p>
+    </form>
+
+    <p class="muted small">No account yet?
+      <a href="{{ url_for('auth.register_page') }}">Register</a>
+    </p>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.getElementById("login-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const errorBox = document.getElementById("login-error");
+    errorBox.hidden = true;
+
+    const response = await fetch("/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({
+        email: document.getElementById("login-email").value,
+        password: document.getElementById("login-password").value,
+      }),
+    });
+
+    if (response.ok) {
+      window.location.href = "/";
+      return;
+    }
+    const data = await response.json().catch(() => ({}));
+    errorBox.textContent = data.error || "Login failed.";
+    errorBox.hidden = false;
+  });
+</script>
+{% endblock %}

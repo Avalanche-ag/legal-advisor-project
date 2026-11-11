@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Register — Legal Advisor{% endblock %}
+
+{% block content %}
+<section class="auth-shell">
+  <div class="auth-card">
+    <h1><i class="fa-solid fa-user-plus"></i> Create account</h1>
+    <p class="muted">Register to start using the IPC legal assistant.</p>
+
+    <form id="register-form" class="auth-form" novalidate>
+      <label for="reg-username">Username</label>
+      <input id="reg-username" name="username" type="text" minlength="3" autocomplete="username" required>
+
+      <label for="reg-email">Email</label>
+      <input id="reg-email" name="email" type="email" autocomplete="email" required>
+
+      <label for="reg-password">Password</label>
+      <input id="reg-password" name="password" type="password" minlength="8"
+             autocomplete="new-password" required>
+      <span class="hint">At least 8 characters.</span>
+
+      <button type="submit" class="btn-primary">Register</button>
+      <p id="register-error" class="form-error" hidden></p>
+    </form>
+
+    <p class="muted small">Already registered?
+      <a href="{{ url_for('auth.login_page') }}">Login</a>
+    </p>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.getElementById("register-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const errorBox = document.getElementById("register-error");
+    errorBox.hidden = true;
+
+    const response = await fetch("/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({
+        username: document.getElementById("reg-username").value,
+        email: document.getElementById("reg-email").value,
+        password: document.getElementById("reg-password").value,
+      }),
+    });
+
+    if (response.ok) {
+      window.location.href = "/";
+      return;
+    }
+    const data = await response.json().catch(() => ({}));
+    errorBox.textContent = data.error || "Registration failed.";
+    errorBox.hidden = false;
+  });
+</script>
+{% endblock %}

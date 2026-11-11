@@ -4,10 +4,16 @@ services:
     runtime: python
     plan: free
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "gunicorn wsgi:app"
-    preDeployCommand: "python ipc_index_builder.py"
+    startCommand: "gunicorn wsgi:app --timeout 120"
+    preDeployCommand: "python scripts/build_index.py && python scripts/init_db.py"
     envVars:
       - key: GEMINI_API_KEY
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ADMIN_EMAIL
+        value: admin@local.dev
+      - key: ADMIN_PASSWORD
         sync: false
       - key: PORT
         value: 10000

@@ -1,17 +1,12 @@
-"""RAG pipeline over the Indian Penal Code (IPC).
+"""RAG orchestration and PDF report generation."""
+from pathlib import Path
 
-Single pipeline: retrieve IPC sections -> generate a grounded answer with
-the Gemini-based provider-agnostic layer.
-"""
-from generator import generate
-from ipc_retriever import retrieve_ipc_sections
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.utils import simpleSplit
-from reportlab.pdfgen import canvas
+from .generator import generate
+from .retriever import retrieve_ipc_sections
 
-# Prompt that shapes the answer over retrieved IPC sections.
-# Ported/condensed from reference/tasks/ipc_section_task.py — now used directly
-# against retrieved context in a single RAG step (no agent wrapper).
+BASE_DIR = Path(__file__).resolve().parents[2]
+REPORT_PATH = str(BASE_DIR / "AI_Lawyer_Report.pdf")
+
 IPC_QA_TEMPLATE = """
 You are an AI legal assistant specializing in Indian law and the Indian Penal Code (IPC).
 Use ONLY the IPC sections provided in the context to answer the user's question.
@@ -42,7 +37,7 @@ def _format_context(sections: list[dict]) -> str:
 
 
 def _to_text(response) -> str:
-    """Extract text from a LangChain chat response."""
+    """Extract plain text from a LangChain chat response."""
     content = getattr(response, "content", response)
     if isinstance(content, list):
         return "".join(part.get("text", "") for part in content if isinstance(part, dict))
@@ -50,25 +45,31 @@ def _to_text(response) -> str:
 
 
 def answer_ipc_query(query: str, history: str = "") -> tuple[str, list[dict]]:
-    """Retrieve top-3 IPC sections and generate a grounded answer.
+    """Retrieve the top-3 IPC sections and generate a grounded answer.
 
-    Returns (answer_text, retrieved_sections) so the UI can show citations.
+    Returns (answer_text, retrieved_sections).
     """
     sections = retrieve_ipc_sections(query, k=3)
-    context = _format_context(sections)
     response = generate(
         IPC_QA_TEMPLATE,
         question=query,
-        context=context,
+        context=_format_context(sections),
         history=history,
     )
     return _to_text(response), sections
 
 
 def generate_report(user_queries: list[str], ai_responses: list[str]) -> str:
-    """Produce a downloadable PDF of the Q&A transcript (reportlab)."""
-    pdf_path = "AI_Lawyer_Report.pdf"
-    c = canvas.Canvas(pdf_path, pagesize=letter)
+    """Render a Q&A transcript to a PDF and return the file path.
+
+    ReportLab is imported lazily so a broken image/PDF dependency can never
+    prevent the Flask app itself from starting.
+    """
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.utils import simpleSplit
+    from reportlab.pdfgen import canvas
+
+    c = canvas.Canvas(REPORT_PATH, pagesize=letter)
     c.setFont("Helvetica-Bold", 16)
     c.drawString(100, 750, "AI Lawyer Report")
     c.setFont("Helvetica", 12)
@@ -99,4 +100,4 @@ def generate_report(user_queries: list[str], ai_responses: list[str]) -> str:
             y = 750
 
     c.save()
-    return pdf_path
+    return REPORT_PATH

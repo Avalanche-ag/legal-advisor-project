@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Admin Dashboard — Legal Advisor{% endblock %}
+
+{% block content %}
+<section class="admin-shell">
+  <h1><i class="fa-solid fa-shield-halved"></i> Admin Dashboard</h1>
+
+  <div class="stat-grid">
+    <div class="stat-card"><span class="stat-label">Total Users</span><strong id="stat-users">—</strong></div>
+    <div class="stat-card"><span class="stat-label">Total Queries</span><strong id="stat-queries">—</strong></div>
+    <div class="stat-card"><span class="stat-label">Success Rate</span><strong id="stat-success">—</strong></div>
+    <div class="stat-card"><span class="stat-label">Avg Latency</span><strong id="stat-latency">—</strong></div>
+  </div>
+
+  <section class="panel">
+    <header class="panel-head">
+      <h2>User Management</h2>
+    </header>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>ID</th><th>Username</th><th>Email</th><th>Role</th>
+            <th>Status</th><th>Queries</th><th>Created</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="users-body">
+          <tr><td colspan="8" class="muted">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <header class="panel-head">
+      <h2>System Query Logs</h2>
+      <div class="filters">
+        <select id="log-status">
+          <option value="">All statuses</option>
+          <option value="SUCCESS">Success only</option>
+          <option value="FAILED">Failed only</option>
+        </select>
+        <select id="log-sort">
+          <option value="date">Newest first</option>
+          <option value="latency">Slowest first</option>
+        </select>
+        <button type="button" id="log-refresh" class="btn-ghost">Refresh</button>
+      </div>
+    </header>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Timestamp</th><th>User</th><th>Query</th><th>Status</th>
+            <th>Latency</th><th>Citations</th>
+          </tr>
+        </thead>
+        <tbody id="logs-body">
+          <tr><td colspan="6" class="muted">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</section>
+
+<div id="modal" class="modal" hidden>
+  <div class="modal-card">
+    <header>
+      <h3 id="modal-title">Details</h3>
+      <button type="button" class="icon-btn" id="modal-close" aria-label="Close">&times;</button>
+    </header>
+    <div id="modal-body" class="modal-body"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='admin.js') }}"></script>
+{% endblock %}
