@@ -3,6 +3,17 @@ services:
     name: ai-lawyer-ipc
     runtime: python
     plan: free
+
+    # ---------------------------------------------------------------
+    # Profile selection — pick ONE pair of build/start commands.
+    #
+    # (A) ONNX profile  ~300 MB peak  [current default]
+    # buildCommand: pip install -r requirements-render.txt
+    #
+    # (B) Hybrid HF profile  ~385 MB peak
+    #     Needs CPU-only torch wheels (no CUDA → smaller image, lower RSS).
+    # buildCommand: pip install -r requirements-render-hf.txt --extra-index-url https://download.pytorch.org/whl/cpu
+    # ---------------------------------------------------------------
     buildCommand: "pip install -r requirements-render.txt"
     startCommand: "gunicorn wsgi:app --workers 1 --threads 4 --timeout 120 --max-requests 500 --max-requests-jitter 50"
     preDeployCommand: "python scripts/build_index.py --format numpy && python scripts/init_db.py"
@@ -11,15 +22,23 @@ services:
         sync: false
       - key: SECRET_KEY
         generateValue: true
+
       # --- lightweight runtime profile (fits in 512 MB) ---
       - key: VECTOR_BACKEND
         value: numpy
+      # ONNX profile: onnx   |   Hybrid HF profile: hf
       - key: EMBEDDING_BACKEND
         value: onnx
       - key: GENERATION_BACKEND
         value: rest
       - key: MALLOC_ARENA_MAX
         value: "2"
+      # Only used when EMBEDDING_BACKEND=hf — keeps PyTorch arenas small.
+      - key: TORCH_NUM_THREADS
+        value: "1"
+      - key: TOKENIZERS_PARALLELISM
+        value: "false"
+
       # --- MySQL (see README: Aiven / TiDB Cloud free tiers) ---
       - key: MYSQL_HOST
         sync: false
@@ -31,6 +50,7 @@ services:
         sync: false
       - key: MYSQL_DATABASE
         value: ipc_app
+
       # --- initial admin ---
       - key: ADMIN_EMAIL
         value: admin@local.dev

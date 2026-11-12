@@ -1,17 +1,21 @@
 """Embedding model used by the vector store.
 
-Two interchangeable backends produce vectors for
-`sentence-transformers/all-MiniLM-L6-v2` (384-dim, mean pooling):
+Backends (``EMBEDDING_BACKEND``):
 
-* ``hf``   — sentence-transformers (needs torch/transformers, ~450 MB RSS).
-* ``onnx`` — onnxruntime + tokenizers (~180 MB RSS, no torch).
+* ``hf``   — sentence-transformers / PyTorch (large, ~250-330 MB RSS).
+* ``onnx`` — onnxruntime + tokenizers (light, ~180 MB RSS, no torch).
 
-Because both wrap the *same* model with the same pooling, an index built with
-either backend is queryable with the other — the Chroma collection does not
-need rebuilding when switching.
+Both wrap ``sentence-transformers/all-MiniLM-L6-v2`` with **mean pooling and no
+L2 normalisation**, producing 384-dim float32 vectors. The same
+``vectorstore/ipc_index.npz`` is therefore valid for either backend — vectors
+differ only by float32 rounding (cosine similarity > 0.999 in practice).
 
-Select with ``EMBEDDING_BACKEND=onnx`` (recommended on memory-constrained
-hosts such as Render's free tier). Defaults to ``hf``.
+Extra env knobs (matter when PyTorch is in play):
+
+* ``TORCH_NUM_THREADS``  — call ``torch.set_num_threads(n)``; ``1`` minimises
+                           per-thread arena memory (recommended under 512 MB).
+* ``TOKENIZERS_PARALLELISM`` — defaults to ``false`` to avoid the tokenizer
+                           thread pool.
 """
 import os
 from functools import lru_cache
@@ -23,6 +27,7 @@ EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 BACKEND = os.getenv("EMBEDDING_BACKEND", "hf").strip().lower()
 CACHE_DIR = Path(os.getenv("ONNX_CACHE_DIR", Path.home() / ".cache" / "legal-advisor-onnx"))
 MAX_TOKENS = 256
+TORCH_NUM_THREADS = int(os.getenv("TORCH_NUM_THREADS", "0"))
 
 
 class OnnxMiniLMEmbeddings:
@@ -37,23 +42,17 @@ class OnnxMiniLMEmbeddings:
         cache_dir.mkdir(parents=True, exist_ok=True)
 
         model_path = hf_hub_download(
-            repo_id=repo_id,
-            filename="onnx/model.onnx",
-            cache_dir=str(cache_dir),
+            repo_id=repo_id, filename="onnx/model.onnx", cache_dir=str(cache_dir)
         )
         tokenizer_path = hf_hub_download(
-            repo_id=repo_id,
-            filename="tokenizer.json",
-            cache_dir=str(cache_dir),
+            repo_id=repo_id, filename="tokenizer.json", cache_dir=str(cache_dir)
         )
 
         self._tokenizer = Tokenizer.from_file(tokenizer_path)
         self._tokenizer.enable_truncation(max_length=MAX_TOKENS)
         self._tokenizer.enable_padding()
 
-        self._session = ort.InferenceSession(
-            model_path, providers=["CPUExecutionProvider"]
-        )
+        self._session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
         self._input_names = {item.name for item in self._session.get_inputs()}
 
     def _encode(self, texts: list[str]) -> np.ndarray:
@@ -67,7 +66,6 @@ class OnnxMiniLMEmbeddings:
 
         hidden = self._session.run(None, feeds)[0]
 
-        # Mean pooling over real tokens only, matching sentence-transformers.
         mask = attention_mask[..., None].astype(np.float32)
         summed = (hidden * mask).sum(axis=1)
         counts = np.clip(mask.sum(axis=1), 1e-9, None)
@@ -80,12 +78,43 @@ class OnnxMiniLMEmbeddings:
         return self._encode([text])[0].tolist()
 
 
+class TorchMiniLMEmbeddings:
+    """sentence-transformers (PyTorch) backend.
+
+    Imports torch/transformers lazily and never touches langchain, ChromaDB or
+    gRPC, so selecting ``hf`` cannot pull the vector-store or LLM client stacks.
+    """
+
+    def __init__(self, model_name: str = EMBEDDING_MODEL_NAME):
+        os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+        import torch
+
+        if TORCH_NUM_THREADS > 0:
+            torch.set_num_threads(TORCH_NUM_THREADS)
+
+        from sentence_transformers import SentenceTransformer
+
+        self._model = SentenceTransformer(model_name)
+        self.dimension = self._model.get_sentence_embedding_dimension()
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        vectors = self._model.encode(
+            [str(t) for t in texts],
+            batch_size=32,
+            convert_to_numpy=True,
+            normalize_embeddings=False,  # must match the ONNX backend / index
+            show_progress_bar=False,
+        )
+        return np.asarray(vectors, dtype=np.float32).tolist()
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed_documents([text])[0]
+
+
 @lru_cache(maxsize=1)
 def get_embedding_model():
     """Return the configured embedding backend (cached process-wide)."""
     if BACKEND == "onnx":
         return OnnxMiniLMEmbeddings()
-
-    from langchain_huggingface import HuggingFaceEmbeddings
-
-    return HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
+    return TorchMiniLMEmbeddings()

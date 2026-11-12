@@ -89,18 +89,55 @@ variables. Both variants produce equivalent behaviour.
 | LLM transport | langchain-google-genai (gRPC) | plain HTTPS (`requests`) | `GENERATION_BACKEND=sdk\|rest` |
 | Database | SQLite file | MySQL | `MYSQL_*` / `DATABASE_URL` |
 
-Measured peak memory for a full `/ask` request:
+Measured peak RSS for a full `/ask` request (same machine, same query):
 
-| Profile | Peak RSS |
-|---|---|
-| Chroma + torch + gRPC (default) | ~600 MB |
-| NumPy + ONNX + REST (light) | **~300 MB** |
+| Profile | Peak RSS | Notes |
+|---|---|---|
+| Chroma + torch + gRPC (legacy default) | 562 MB | over 512 MB ceiling |
+| Chroma + torch + REST | 548 MB | rest saves ~14 MB |
+| Chroma + ONNX + REST | 463 MB | onnx saves ~85 MB vs torch |
+| **NumPy + ONNX + REST** (default light) | **301 MB** | numpy saves ~163 MB vs chroma |
+| **NumPy + torch + REST** (hybrid) | **~386 MB projected** | derived: 301 + 85 = 386; cross-check 548 − 163 = 385 |
+
+Both embedding backends wrap the same `all-MiniLM-L6-v2` model with mean
+pooling and **no L2 normalisation**, so the same `.npz` index serves either
+backend. Retrieval uses cosine similarity, which is magnitude-invariant, so
+even a normalisation difference could not change the ranking.
 
 Both embedding backends wrap the same `all-MiniLM-L6-v2` model with identical
 mean pooling, so **the same index works with either** — retrieval returns the
 same sections ([382, 379, 411] for *"punishment for theft"*).
 
 ---
+
+### Switching embeddings back to PyTorch (hybrid profile)
+
+Keep the NumPy index and the REST LLM transport, but use
+sentence-transformers/PyTorch for embeddings:
+
+```bash
+pip install -r requirements-render-hf.txt \
+    --extra-index-url https://download.pytorch.org/whl/cpu
+
+export VECTOR_BACKEND=numpy
+export EMBEDDING_BACKEND=hf
+export GENERATION_BACKEND=rest
+export TORCH_NUM_THREADS=1          # smaller per-thread arenas
+export TOKENIZERS_PARALLELISM=false
+```
+
+Projected peak ≈386 MB, leaving ~126 MB (25%) under the 512 MB ceiling —
+within the 10 % safety policy. Install **CPU-only** torch wheels: the default
+Linux wheel bundles CUDA (~2.5 GB installed) and raises RSS.
+
+Cold start is slower than ONNX (PyTorch import ≈3–8 s on Linux vs ≈0.5 s), but
+it happens on import of the first request, well inside Gunicorn's 120 s worker
+timeout. The `preDeployCommand` builds the index before the service starts.
+
+If RSS ever exceeds ~460 MB, escalate in this order:
+`TORCH_NUM_THREADS=1` → `--threads 2` → torch dynamic quantization
+(`torch.quantization.quantize_dynamic`, int8) — the last one changes vectors,
+so rebuild the index with `--format numpy` afterwards.
 
 ## Project structure
 

@@ -1,0 +1,49 @@
+# Hybrid runtime: NumPy vector index + PyTorch/HuggingFace embeddings + REST LLM.
+#
+# Use when you want sentence-transformers back for embeddings while staying
+# well under the 512 MB Render free-tier ceiling.
+#
+# Projected peak RSS (full /ask): ~385 MB  (measured upper bound)
+#
+# IMPORTANT — install CPU-only PyTorch wheels. The default PyPI `torch` wheel
+# on Linux bundles CUDA (~2.5 GB installed, much slower builds). Use:
+#
+#   pip install -r requirements-render-hf.txt \
+#       --extra-index-url https://download.pytorch.org/whl/cpu
+#
+# or set PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu on the host.
+#
+# Environment for this profile:
+#   VECTOR_BACKEND=numpy
+#   EMBEDDING_BACKEND=hf
+#   GENERATION_BACKEND=rest
+#   TORCH_NUM_THREADS=1
+#   TOKENIZERS_PARALLELISM=false
+
+Flask==3.0.3
+Flask-Login==0.6.3
+Flask-SQLAlchemy==3.1.1
+SQLAlchemy==2.0.51
+Werkzeug==3.1.8
+Jinja2==3.1.6
+MarkupSafe==3.0.3
+itsdangerous==2.2.0
+click==8.4.2
+blinker==1.9.0
+greenlet==3.5.3
+gunicorn==23.0.0
+python-dotenv==1.0.1
+PyMySQL==1.2.4
+requests==2.34.2
+
+# PyTorch embedding stack (CPU wheels — see header)
+torch==2.4.1
+transformers==4.57.6
+sentence-transformers==3.4.1
+tokenizers==0.22.2
+huggingface-hub>=0.26
+numpy>=1.26,<3
+safetensors>=0.4
+
+# PDF report
+reportlab==4.3.1
