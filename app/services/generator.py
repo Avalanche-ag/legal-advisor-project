@@ -1,113 +1,250 @@
-"""Provider-agnostic generation layer.
+"""Multi-provider LLM generation with a 3-tier fallback queue.
 
-`PROVIDERS` is an ordered list of factories; the first success wins, later
-entries act as fallbacks. A fine-tuned model can be prepended later without
-touching the Flask app or the retrieval layer.
+Order (first success wins):
 
-Transports (``GENERATION_BACKEND``):
+    1. Groq        — free tier, fastest              (GROQ_API_KEY)
+    2. MiniMax     — very low cost, OpenAI-compatible (MINIMAX_API_KEY)
+    3. Gemini      — free tier, high availability     (GEMINI_API_KEY)
 
-* ``sdk``  — LangChain + langchain-google-genai (gRPC). Default locally.
-* ``rest`` — plain HTTPS via requests, template rendered with str.format.
-             Avoids importing langchain/gRPC entirely (~150 MB lighter);
-             recommended on memory-constrained hosts such as Render free.
+Every call goes through ``requests``. No ``openai`` / ``groq`` /
+``google-generativeai`` / ``langchain`` imports, which keeps peak RSS low
+enough for Render's 512 MB free tier.
+
+The retrieval layer supplies the legal knowledge: the prompt already contains
+the top-3 IPC sections. Providers are used purely as language models — none of
+them performs a web search or knows the IPC.
 """
+import logging
 import os
+import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Callable
 
 import requests
 from dotenv import load_dotenv
 
 load_dotenv()
 
-DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
-REST_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models"
-BACKEND = os.getenv("GENERATION_BACKEND", "sdk").strip().lower()
+logger = logging.getLogger(__name__)
+
+
+class ProviderError(RuntimeError):
+    """Raised when a single provider cannot produce an answer."""
 
 
 @dataclass
 class GenerationResult:
-    """Mimics a LangChain message: exposes `.content`."""
+    """Mimics a LangChain chat message: exposes ``.content``."""
 
     content: str
+    provider: str = ""
 
 
-class RestGemini:
-    """Minimal Gemini client over plain HTTPS (no gRPC, no langchain)."""
+# --------------------------------------------------------------------------
+# HTTP helper
+# --------------------------------------------------------------------------
+def _post(url: str, *, headers: dict, payload: dict, timeout: tuple[int, int]) -> dict:
+    """POST JSON and return the decoded body, translating failures to ProviderError."""
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=timeout)
+    except requests.Timeout as exc:
+        raise ProviderError(f"timeout after {timeout[1]}s") from exc
+    except requests.RequestException as exc:
+        raise ProviderError(f"network error: {exc}") from exc
 
-    def __init__(self, api_key: str, model: str = DEFAULT_MODEL, timeout: int = 30):
-        self.api_key = api_key
-        self.model = model
-        self.timeout = timeout
+    if response.status_code == 429:
+        raise ProviderError("rate limited (429)")
+    if response.status_code >= 400:
+        raise ProviderError(f"HTTP {response.status_code}: {response.text[:160]}")
 
-    def invoke(self, prompt: str) -> GenerationResult:
-        response = requests.post(
-            f"{REST_ENDPOINT}/{self.model}:generateContent",
-            params={"key": self.api_key},
-            json={
-                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0.3},
-            },
-            timeout=self.timeout,
-        )
-        response.raise_for_status()
-
-        candidates = response.json().get("candidates") or []
-        if not candidates:
-            raise RuntimeError(f"Empty Gemini response: {response.text[:200]}")
-
-        parts = candidates[0].get("content", {}).get("parts") or []
-        return GenerationResult("".join(part.get("text", "") for part in parts))
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise ProviderError(f"invalid JSON: {response.text[:160]}") from exc
 
 
-def _rest_provider():
-    key = os.getenv("GEMINI_API_KEY", "")
-    if not key:
-        raise RuntimeError("GEMINI_API_KEY is not set")
-    return RestGemini(api_key=key)
+def _openai_content(data: dict) -> str:
+    """Extract text from an OpenAI-compatible chat-completions payload."""
+    choices = data.get("choices") or []
+    if not choices:
+        raise ProviderError("no choices in response")
+    message = choices[0].get("message") or {}
+    text = message.get("content") or choices[0].get("text") or ""
+    if isinstance(text, list):  # some gateways return content parts
+        text = "".join(part.get("text", "") for part in text if isinstance(part, dict))
+    return str(text).strip()
 
 
-def _sdk_provider():
-    from langchain_google_genai import ChatGoogleGenerativeAI
+# --------------------------------------------------------------------------
+# 1. Groq
+# --------------------------------------------------------------------------
+def _call_groq(system_prompt: str, user_prompt: str) -> str:
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        raise ProviderError("GROQ_API_KEY not configured")
 
-    return ChatGoogleGenerativeAI(
-        model=DEFAULT_MODEL,
-        google_api_key=os.getenv("GEMINI_API_KEY"),
-        temperature=0.3,
-        request_timeout=30,
-        max_retries=2,
+    data = _post(
+        os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1/chat/completions"),
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        payload={
+            "model": os.getenv("GROQ_MODEL", "openai/gpt-oss-20b"),
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": float(os.getenv("LLM_TEMPERATURE", "0.2")),
+            "max_tokens": int(os.getenv("LLM_MAX_TOKENS", "1024")),
+        },
+        timeout=(5, int(os.getenv("GROQ_TIMEOUT", "12"))),
+    )
+    return _openai_content(data)
+
+
+# --------------------------------------------------------------------------
+# 2. MiniMax (OpenAI-compatible v2 endpoint)
+# --------------------------------------------------------------------------
+def _call_minimax(system_prompt: str, user_prompt: str) -> str:
+    api_key = os.getenv("MINIMAX_API_KEY")
+    if not api_key:
+        raise ProviderError("MINIMAX_API_KEY not configured")
+
+    data = _post(
+        os.getenv(
+            "MINIMAX_BASE_URL", "https://api.minimaxi.chat/v1/text/chatcompletion_v2"
+        ),
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        payload={
+            "model": os.getenv("MINIMAX_MODEL", "abab6.5s"),
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": float(os.getenv("LLM_TEMPERATURE", "0.2")),
+            "max_tokens": int(os.getenv("LLM_MAX_TOKENS", "1024")),
+        },
+        timeout=(5, int(os.getenv("MINIMAX_TIMEOUT", "15"))),
     )
 
+    # MiniMax reports application-level errors inside a 200 response.
+    status = (data.get("base_resp") or {}).get("status_code")
+    if status not in (None, 0):
+        raise ProviderError(
+            f"status_code={status} {(data.get('base_resp') or {}).get('status_msg', '')}".strip()
+        )
 
-PROVIDERS = [_rest_provider] if BACKEND == "rest" else [_sdk_provider]
+    try:
+        return _openai_content(data)
+    except ProviderError:
+        reply = data.get("reply")
+        if reply:
+            return str(reply).strip()
+        raise
+
+
+# --------------------------------------------------------------------------
+# 3. Gemini
+# --------------------------------------------------------------------------
+def _call_gemini(system_prompt: str, user_prompt: str) -> str:
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise ProviderError("GEMINI_API_KEY not configured")
+
+    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+    data = _post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        # API key goes in a header so it never appears in URLs or access logs.
+        headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+        payload={
+            "system_instruction": {"parts": [{"text": system_prompt}]},
+            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+            "generationConfig": {
+                "temperature": float(os.getenv("LLM_TEMPERATURE", "0.2")),
+                "maxOutputTokens": int(os.getenv("LLM_MAX_TOKENS", "1024")),
+            },
+        },
+        timeout=(5, int(os.getenv("GEMINI_TIMEOUT", "15"))),
+    )
+
+    candidates = data.get("candidates") or []
+    if not candidates:
+        feedback = data.get("promptFeedback") or {}
+        raise ProviderError(f"no candidates (blockReason={feedback.get('blockReason')})")
+
+    parts = (candidates[0].get("content") or {}).get("parts") or []
+    text = "".join(part.get("text", "") for part in parts).strip()
+    if not text:
+        raise ProviderError(f"empty completion (finishReason={candidates[0].get('finishReason')})")
+    return text
+
+
+# Ordered fallback queue. Every entry is (name, callable(system, user) -> str).
+PROVIDERS: list[tuple[str, Callable[[str, str], str]]] = [
+    ("groq", _call_groq),
+    ("minimax", _call_minimax),
+    ("gemini", _call_gemini),
+]
+
+
+def generate_answer(system_prompt: str, user_prompt: str) -> GenerationResult:
+    """Try each provider in order; return the first successful answer."""
+    errors: list[str] = []
+
+    for name, provider_fn in PROVIDERS:
+        started = time.perf_counter()
+        try:
+            logger.info("Attempting generation with provider: %s", name)
+            text = provider_fn(system_prompt, user_prompt)
+            if not text:
+                raise ProviderError("empty response")
+
+            elapsed_ms = round((time.perf_counter() - started) * 1000)
+            logger.info("Provider %s succeeded in %s ms", name, elapsed_ms)
+            return GenerationResult(content=text, provider=name)
+
+        except Exception as exc:  # any failure moves us down the queue
+            elapsed_ms = round((time.perf_counter() - started) * 1000)
+            logger.warning(
+                "Provider %s failed after %s ms: %s — trying next", name, elapsed_ms, exc
+            )
+            errors.append(f"{name}: {exc}")
+            continue
+
+    raise RuntimeError("All LLM providers failed. Details: " + "; ".join(errors))
+
+
+def generate(template: str, **vars) -> GenerationResult:
+    """Backward-compatible wrapper used by the RAG pipeline.
+
+    Renders ``template`` and splits it into a system instruction block and a
+    user block so providers receive a proper chat-shaped request.
+    """
+    rendered = _render(template, vars)
+    system_prompt, user_prompt = _split_prompt(rendered)
+    return generate_answer(system_prompt, user_prompt)
 
 
 def _render(template: str, variables: dict) -> str:
     try:
         return template.format(**variables)
     except (KeyError, IndexError):
-        # Template contains literal braces; fall back to sequential replace.
         rendered = template
         for key, value in variables.items():
             rendered = rendered.replace("{" + key + "}", str(value))
         return rendered
 
 
-def generate(template: str, **vars: Any):
-    """Render a prompt and call the first provider that responds."""
-    last_error: Exception | None = None
+def _split_prompt(rendered: str) -> tuple[str, str]:
+    """Use the instruction paragraph as the system message, the rest as user."""
+    marker = "Previous Conversation:"
+    if marker in rendered:
+        head, tail = rendered.split(marker, 1)
+        return head.strip(), (marker + tail).strip()
+    return DEFAULT_SYSTEM_PROMPT, rendered.strip()
 
-    for make in PROVIDERS:
-        try:
-            model = make()
-            if BACKEND == "rest":
-                return model.invoke(_render(template, vars))
 
-            from langchain_core.prompts import ChatPromptTemplate
-
-            return (ChatPromptTemplate.from_template(template) | model).invoke(vars)
-        except Exception as exc:  # try the next provider
-            last_error = exc
-            continue
-
-    raise RuntimeError(f"All models failed. Last error: {last_error}") from last_error
+DEFAULT_SYSTEM_PROMPT = (
+    "You are an AI legal assistant specializing in Indian law and the Indian "
+    "Penal Code (IPC). Answer only from the supplied IPC context, cite the "
+    "section number for every claim, and say you don't know if the context is "
+    "insufficient."
+)

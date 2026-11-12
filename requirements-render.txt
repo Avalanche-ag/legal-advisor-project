@@ -1,8 +1,9 @@
 # Lightweight runtime for memory-constrained hosts (Render free tier, 512 MB).
 #
 # Measured peak RSS with this set: ~300 MB (vs ~600 MB for the torch stack).
-# Uses the NumPy vector index + ONNX embeddings + REST generation, so no
-# torch / transformers / sentence-transformers / chromadb / langchain.
+# Uses the NumPy vector index + ONNX embeddings. The LLM layer talks to
+# Groq / MiniMax / Gemini over plain HTTP (requests) — no LangChain, no gRPC,
+# no vendor SDKs. This file therefore contains no langchain*/chroma packages.
 #
 #   pip install -r requirements-render.txt
 #   python scripts/build_index.py --format numpy
@@ -10,7 +11,7 @@
 # Environment:
 #   VECTOR_BACKEND=numpy
 #   EMBEDDING_BACKEND=onnx
-#   GENERATION_BACKEND=rest
+#   GROQ_API_KEY / MINIMAX_API_KEY / GEMINI_API_KEY
 
 Flask==3.0.3
 Flask-Login==0.6.3

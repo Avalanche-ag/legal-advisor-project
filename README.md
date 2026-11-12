@@ -86,7 +86,7 @@ variables. Both variants produce equivalent behaviour.
 |---|---|---|---|
 | Vector store | ChromaDB (HNSW) | NumPy `.npz` + cosine | `VECTOR_BACKEND=chroma\|numpy` |
 | Embeddings | sentence-transformers (torch) | onnxruntime MiniLM | `EMBEDDING_BACKEND=hf\|onnx` |
-| LLM transport | langchain-google-genai (gRPC) | plain HTTPS (`requests`) | `GENERATION_BACKEND=sdk\|rest` |
+| LLM transport | — | plain HTTPS (`requests`) for all providers | always REST |
 | Database | SQLite file | MySQL | `MYSQL_*` / `DATABASE_URL` |
 
 Measured peak RSS for a full `/ask` request (same machine, same query):
@@ -121,7 +121,6 @@ pip install -r requirements-render-hf.txt \
 
 export VECTOR_BACKEND=numpy
 export EMBEDDING_BACKEND=hf
-export GENERATION_BACKEND=rest
 export TORCH_NUM_THREADS=1          # smaller per-thread arenas
 export TOKENIZERS_PARALLELISM=false
 ```
@@ -138,6 +137,42 @@ If RSS ever exceeds ~460 MB, escalate in this order:
 `TORCH_NUM_THREADS=1` → `--threads 2` → torch dynamic quantization
 (`torch.quantization.quantize_dynamic`, int8) — the last one changes vectors,
 so rebuild the index with `--format numpy` afterwards.
+
+## LLM fallback chain
+
+Generation uses three providers in order, all over plain HTTP (`requests`):
+
+| # | Provider | Model (default) | Why | Timeout |
+|---|---|---|---|---|
+| 1 | Groq | `openai/gpt-oss-20b` | free tier, fastest | 12 s |
+| 2 | MiniMax | `abab6.5s` | very low cost, OpenAI-compatible | 15 s |
+| 3 | Gemini | `gemini-2.5-flash-lite` | free tier, high availability | 15 s |
+
+Groq's model catalogue changes without notice — check
+`GET https://api.groq.com/openai/v1/models` and set `GROQ_MODEL` accordingly
+(currently `openai/gpt-oss-20b`, `openai/gpt-oss-120b`, `qwen/qwen3.8-27b`).
+
+A provider is skipped when its API key is absent. Any failure (429, timeout,
+5xx, empty completion) logs a warning and moves to the next provider; if all
+three fail, the request raises and `/ask` returns a clean 500 while the
+`query_log` row records `status=FAILED` with the concatenated reason.
+
+**Where the legal knowledge comes from:** the providers are *language* models —
+none of them searches the web or knows the IPC. The answer is grounded by the
+local vector index:
+
+```
+data/ipc.json  (575 sections, source of truth, build time only)
+      │  python scripts/build_index.py
+      ▼
+vectorstore/ipc_index.npz   (575 × 384 float32 vectors + section text)
+      │  cosine similarity, ~2 ms, $0 per query, no network
+      ▼
+top-3 IPC sections ──► prompt context ──► Groq │ MiniMax │ Gemini
+```
+
+So `ipc.json` is read **only when (re)building the index**; at runtime the
+`.npz` file supplies the citations, and the LLM merely phrases them.
 
 ## Project structure
 
@@ -177,7 +212,7 @@ so rebuild the index with `--format numpy` afterwards.
 | Persistence | Flask-SQLAlchemy + MySQL (PyMySQL), SQLite fallback |
 | Vector store | ChromaDB, or NumPy cosine index |
 | Embeddings | `all-MiniLM-L6-v2` via sentence-transformers **or** onnxruntime |
-| Generation | Google Gemini 2.5 Flash Lite (LangChain SDK or REST) |
+| Generation | Groq → MiniMax → Gemini fallback chain (plain HTTP via `requests`) |
 | Reporting | ReportLab |
 | Frontend | Vanilla HTML/CSS/JS |
 | Deploy | Render (`render.yaml`) |
@@ -289,7 +324,7 @@ buildCommand:     pip install -r requirements-render.txt
 preDeployCommand: python scripts/build_index.py --format numpy && python scripts/init_db.py
 startCommand:     gunicorn wsgi:app --workers 1 --threads 4 --timeout 120 \
                               --max-requests 500 --max-requests-jitter 50
-env: VECTOR_BACKEND=numpy, EMBEDDING_BACKEND=onnx, GENERATION_BACKEND=rest,
+env: VECTOR_BACKEND=numpy, EMBEDDING_BACKEND=onnx, GROQ_API_KEY / MINIMAX_API_KEY / GEMINI_API_KEY,
      MALLOC_ARENA_MAX=2, MYSQL_*, GEMINI_API_KEY, SECRET_KEY, ADMIN_*
 ```
 
@@ -313,8 +348,8 @@ under the 512 MB free limit. If you switch back to Chroma/torch, upgrade to a
 - **IPC-only corpus** — CrPC/BNSS, BSA and judgments are not indexed yet.
 - **No rate limiting** — an authenticated user can exhaust the Gemini quota.
 - **No password reset / email verification**.
-- **ONNX/REST light profile** skips LangChain at runtime; the SDK path remains
-  available for local development and for parity testing.
+- **No vendor SDKs at runtime** — generation is plain HTTP; richer SDK features
+  (function calling, schema-constrained output) are not used.
 
 ---
 
