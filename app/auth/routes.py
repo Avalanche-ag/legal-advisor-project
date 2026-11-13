@@ -1,21 +1,33 @@
 """Authentication routes: register, login, logout, profile."""
+import logging
 import re
 
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user, login_required, login_user, logout_user
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from .. import db
 from ..models import User
 
 auth_bp = Blueprint("auth", __name__)
+logger = logging.getLogger(__name__)
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MIN_PASSWORD_LENGTH = 8
+
+DB_ERROR = "Database error. Please try again in a moment."
 
 
 def _payload() -> dict:
     """Accept JSON or classic form submissions."""
     return request.get_json(silent=True) or request.form or {}
+
+
+def _database_error(action: str, exc: Exception):
+    """Roll back and return a JSON 500 instead of an HTML error page."""
+    db.session.rollback()
+    logger.exception("%s failed: %s", action, exc)
+    return jsonify(error=DB_ERROR), 500
 
 
 @auth_bp.get("/login")
@@ -45,15 +57,23 @@ def register():
         return jsonify(error="Username must be at least 3 characters."), 400
     if len(password) < MIN_PASSWORD_LENGTH:
         return jsonify(error=f"Password must be at least {MIN_PASSWORD_LENGTH} characters."), 400
-    if User.query.filter_by(email=email).first():
-        return jsonify(error="An account with that email already exists."), 409
-    if User.query.filter_by(username=username).first():
-        return jsonify(error="That username is already taken."), 409
 
-    user = User(email=email, username=username, role="user")
-    user.set_password(password)
-    db.session.add(user)
-    db.session.commit()
+    try:
+        if User.query.filter_by(email=email).first():
+            return jsonify(error="An account with that email already exists."), 409
+        if User.query.filter_by(username=username).first():
+            return jsonify(error="That username is already taken."), 409
+
+        user = User(email=email, username=username, role="user")
+        user.set_password(password)
+        db.session.add(user)
+        db.session.commit()
+    except IntegrityError:
+        # Two requests raced, or a unique constraint fired first.
+        db.session.rollback()
+        return jsonify(error="That email or username is already registered."), 409
+    except SQLAlchemyError as exc:
+        return _database_error("Registration", exc)
 
     login_user(user)
     return jsonify(user=user.to_dict()), 201
@@ -65,8 +85,13 @@ def login():
     email = (data.get("email") or "").strip().lower()
     password = data.get("password") or ""
 
-    user = User.query.filter_by(email=email).first()
-    if not user or not user.check_password(password):
+    try:
+        user = User.query.filter_by(email=email).first()
+        valid = bool(user) and user.check_password(password)
+    except SQLAlchemyError as exc:
+        return _database_error("Login", exc)
+
+    if not valid:
         return jsonify(error="Invalid email or password."), 401
     if not user.is_active:
         return jsonify(error="This account has been deactivated."), 403

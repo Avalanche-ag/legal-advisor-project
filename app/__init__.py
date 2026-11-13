@@ -1,4 +1,5 @@
 """Application factory, extensions and shared configuration."""
+import logging
 import os
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -44,6 +45,50 @@ def _database_uri(app: Flask) -> str:
         return url
 
     return f"sqlite:///{Path(app.instance_path) / 'ipc_app.db'}"
+
+
+def _prepare_database(app: Flask) -> None:
+    """Create tables and make sure an admin account exists (idempotent).
+
+    This runs on startup so a dashboard-managed service works even when
+    ``preDeployCommand`` (which only applies to blueprint deploys) never ran.
+    Failures are logged instead of raised, so a bad DSN shows up as a clear
+    error in the logs rather than a silently dead container.
+    """
+    from .models import User
+
+    try:
+        with app.app_context():
+            db.create_all()
+
+            email = (os.getenv("ADMIN_EMAIL") or "admin@local.dev").strip().lower()
+            admin = User.query.filter_by(email=email).first()
+
+            if admin is None:
+                admin = User(
+                    email=email,
+                    username=os.getenv("ADMIN_USERNAME", "admin"),
+                    role="admin",
+                    is_active=True,
+                )
+                admin.set_password(os.getenv("ADMIN_PASSWORD", "admin12345"))
+                db.session.add(admin)
+                db.session.commit()
+                app.logger.info("Seeded initial admin account: %s", email)
+            else:
+                # If ADMIN_PASSWORD is set explicitly it is the source of truth,
+                # so a password that drifted from the env value is corrected.
+                wanted = os.getenv("ADMIN_PASSWORD")
+                if wanted and not admin.check_password(wanted):
+                    admin.set_password(wanted)
+                    db.session.commit()
+                    app.logger.warning("Admin password re-synced from ADMIN_PASSWORD: %s", email)
+    except Exception:  # noqa: BLE001 - never block startup on DB issues
+        db.session.rollback()
+        app.logger.exception(
+            "Database bootstrap failed. Check MYSQL_*/DATABASE_URL and that the "
+            "database accepts remote connections."
+        )
 
 
 def create_app(config: dict | None = None) -> Flask:
@@ -93,6 +138,18 @@ def create_app(config: dict | None = None) -> Flask:
             return jsonify(error="Authentication required."), 401
         return redirect(url_for("auth.login_page"))
 
+    @app.teardown_appcontext
+    def _clean_session(exception=None):
+        """Never leave a poisoned session behind.
+
+        A single failed flush (missing table, duplicate row, lost MySQL
+        connection) otherwise poisons every later request with SQLAlchemy's
+        "this Session's transaction has been rolled back" (e3q8) error.
+        """
+        if exception is not None:
+            db.session.rollback()
+        db.session.remove()
+
     from .admin.routes import admin_bp
     from .auth.routes import auth_bp
     from .main.routes import main_bp
@@ -100,5 +157,24 @@ def create_app(config: dict | None = None) -> Flask:
     app.register_blueprint(auth_bp)
     app.register_blueprint(main_bp)
     app.register_blueprint(admin_bp)
+
+    @app.get("/healthz")
+    def healthz():
+        """Lightweight probe: process alive + database reachable."""
+        from sqlalchemy import text
+
+        status = {"status": "ok", "database": "ok"}
+        code = 200
+        try:
+            db.session.execute(text("SELECT 1"))
+        except Exception as exc:  # noqa: BLE001
+            db.session.rollback()
+            status["database"] = f"error: {exc.__class__.__name__}"
+            code = 503
+        return jsonify(status), code
+
+    # Tests create and seed their own database.
+    if not app.config.get("TESTING"):
+        _prepare_database(app)
 
     return app

@@ -343,6 +343,20 @@ under the 512 MB free limit. If you switch back to Chroma/torch, upgrade to a
 
 ---
 
+### First boot and health checks
+
+Tables and the initial admin are created automatically at startup, so a
+dashboard-managed service works even if `preDeployCommand` never ran. If
+`ADMIN_PASSWORD` is set, an existing admin's password is re-synced to it on
+boot — that is the quickest fix for "login failed" after changing the env var.
+
+`GET /healthz` returns `{"status": "ok", "database": "ok"}` (503 when the
+database is unreachable), so you can tell an app problem from a DB problem.
+
+> If you leave `MYSQL_*` unset on Render, the app uses SQLite on the ephemeral
+> disk: accounts and history are wiped on every restart and the admin is
+> re-seeded from `ADMIN_*`. For persistence, point it at MySQL.
+
 ## Known limitations
 
 - **Single worker** — SQLite sessions and the in-process index cache assume one
