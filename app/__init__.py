@@ -160,17 +160,37 @@ def create_app(config: dict | None = None) -> Flask:
 
     @app.get("/healthz")
     def healthz():
-        """Lightweight probe: process alive + database reachable."""
+        """Diagnostics: database, vector index and provider key presence."""
         from sqlalchemy import text
 
-        status = {"status": "ok", "database": "ok"}
+        index_path = BASE_DIR / "vectorstore" / "ipc_index.npz"
+        status = {
+            "status": "ok",
+            "database": "ok",
+            "vector_index": "ok" if index_path.exists() else "missing",
+            "vector_backend": os.getenv("VECTOR_BACKEND", "numpy"),
+            "embedding_backend": os.getenv("EMBEDDING_BACKEND", "hf"),
+            "providers": {
+                "groq": bool(os.getenv("GROQ_API_KEY")),
+                "minimax": bool(os.getenv("MINIMAX_API_KEY")),
+                "gemini": bool(os.getenv("GEMINI_API_KEY")),
+            },
+        }
         code = 200
+
         try:
             db.session.execute(text("SELECT 1"))
         except Exception as exc:  # noqa: BLE001
             db.session.rollback()
             status["database"] = f"error: {exc.__class__.__name__}"
             code = 503
+
+        if status["vector_index"] == "missing":
+            code = 503
+        if not any(status["providers"].values()):
+            status["status"] = "degraded (no LLM API key configured)"
+            code = 503
+
         return jsonify(status), code
 
     # Tests create and seed their own database.

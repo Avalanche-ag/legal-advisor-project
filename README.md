@@ -350,8 +350,18 @@ dashboard-managed service works even if `preDeployCommand` never ran. If
 `ADMIN_PASSWORD` is set, an existing admin's password is re-synced to it on
 boot — that is the quickest fix for "login failed" after changing the env var.
 
-`GET /healthz` returns `{"status": "ok", "database": "ok"}` (503 when the
-database is unreachable), so you can tell an app problem from a DB problem.
+`GET /healthz` reports the database, whether the vector index is present, and
+which provider keys are set — it returns 503 when something is missing:
+
+```json
+{"status":"ok","database":"ok","vector_index":"ok",
+ "vector_backend":"numpy","embedding_backend":"hf",
+ "providers":{"groq":true,"minimax":false,"gemini":true}}
+```
+
+> The prebuilt `vectorstore/ipc_index.npz` (884 KB) is committed, so `/ask`
+> works immediately after deploy. If it is ever absent the app rebuilds it on
+> the first request (`AUTO_BUILD_INDEX=0` disables that).
 
 > If you leave `MYSQL_*` unset on Render, the app uses SQLite on the ephemeral
 > disk: accounts and history are wiped on every restart and the admin is

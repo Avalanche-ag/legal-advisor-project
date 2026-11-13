@@ -8,6 +8,7 @@ Two interchangeable vector backends (``VECTOR_BACKEND``):
 * ``chroma`` — persistent ChromaDB collection (HNSW). Default for local dev.
 """
 import json
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -15,6 +16,8 @@ from pathlib import Path
 import numpy as np
 
 from .embeddings import get_embedding_model
+
+logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 VECTORSTORE_DIR = BASE_DIR / "vectorstore"
@@ -27,9 +30,31 @@ BACKEND = os.getenv("VECTOR_BACKEND", "numpy").strip().lower()
 FIELDS = ("section", "section_title", "chapter", "chapter_title", "content")
 
 
+def _build_index_if_missing() -> None:
+    """Build the .npz index on first use when it is not shipped/deployed.
+
+    Managed hosts that ignore ``preDeployCommand`` would otherwise fail every
+    /ask with FileNotFoundError. Set AUTO_BUILD_INDEX=0 to disable.
+    """
+    if IPC_NUMPY_PATH.exists():
+        return
+    if os.getenv("AUTO_BUILD_INDEX", "1") != "1":
+        raise RuntimeError(
+            f"Vector index not found at {IPC_NUMPY_PATH}. "
+            "Run `python scripts/build_index.py --format numpy` at build time, "
+            "or set AUTO_BUILD_INDEX=1 to build it on first request."
+        )
+
+    logger.warning("Vector index missing; building from data/ipc.json (one-off)")
+    from scripts.build_index import build_numpy_index, load_ipc_data, prepare_records
+
+    build_numpy_index(prepare_records(load_ipc_data()))
+
+
 @lru_cache(maxsize=1)
 def _load_numpy_index():
     """Load vectors + metadata once per process."""
+    _build_index_if_missing()
     data = np.load(IPC_NUMPY_PATH, allow_pickle=False)
     vectors = data["vectors"].astype(np.float32)
     metadata = json.loads(str(data["metadata"].item()))

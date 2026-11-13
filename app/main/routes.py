@@ -1,5 +1,6 @@
 """User-facing routes: chat page, RAG query, PDF report, history."""
 import json
+import logging
 import os
 import time
 
@@ -10,6 +11,7 @@ from .. import db
 from ..models import QueryLog
 
 main_bp = Blueprint("main", __name__)
+logger = logging.getLogger(__name__)
 
 
 @main_bp.get("/")
@@ -34,17 +36,24 @@ def ask():
         answer, sections = answer_ipc_query(query)
     except Exception as exc:
         latency_ms = (time.perf_counter() - started) * 1000
-        db.session.add(
-            QueryLog(
-                user_id=current_user.id,
-                query_text=query,
-                status="FAILED",
-                error_message=str(exc),
-                latency_ms=latency_ms,
+        logger.exception("Answer generation failed for query %r", query)
+
+        # Record the failure without masking the original problem.
+        try:
+            db.session.add(
+                QueryLog(
+                    user_id=current_user.id,
+                    query_text=query,
+                    status="FAILED",
+                    error_message=f"{type(exc).__name__}: {exc}"[:2000],
+                    latency_ms=latency_ms,
+                )
             )
-        )
-        db.session.commit()
-        return jsonify(error="Generation failed. Please try again."), 500
+            db.session.commit()
+        except Exception:  # noqa: BLE001 - never fail the error path
+            db.session.rollback()
+
+        return jsonify(error=_failure_hint(exc), detail=type(exc).__name__), 500
 
     latency_ms = (time.perf_counter() - started) * 1000
     log = QueryLog(
@@ -64,6 +73,24 @@ def ask():
         latency_ms=round(latency_ms, 2),
         log_id=log.id,
     )
+
+
+def _failure_hint(exc: Exception) -> str:
+    """Translate an internal failure into something the operator can act on."""
+    text = f"{type(exc).__name__}: {exc}".lower()
+    if isinstance(exc, FileNotFoundError) or "vector index" in text:
+        return (
+            "The legal knowledge base index is missing on the server. "
+            "Build it with `python scripts/build_index.py --format numpy`."
+        )
+    if "all llm providers failed" in text:
+        return (
+            "No LLM provider could answer. Check that GROQ_API_KEY / "
+            "MINIMAX_API_KEY / GEMINI_API_KEY are set and in quota."
+        )
+    if "no module named" in text:
+        return "A required package is missing on the server; check the build log."
+    return "Answer generation failed. Open /healthz for service status."
 
 
 @main_bp.get("/report")

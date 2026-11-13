@@ -21,7 +21,9 @@ instance/
 
 # Generated artifacts
 AI_Lawyer_Report.pdf
-vectorstore/
+# keep the small prebuilt NumPy index in git (avoids a build step on hosts
+# that ignore preDeployCommand); the ChromaDB store is regenerated locally.
+vectorstore/ipc_chroma/
 ft/data/
 ft/output/
 ft/merged-*/
@@ -53,5 +55,3 @@ scripts/fix_dataset_targeted.py
 scripts/generate_dataset.py
 scripts/split_dataset.py
 
-# Lightweight vector index artifact
-vectorstore/ipc_index.npz
