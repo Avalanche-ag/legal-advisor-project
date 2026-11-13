@@ -17,11 +17,45 @@
     if (chat) chat.scrollTop = chat.scrollHeight;
   }
 
+  /**
+   * Render assistant text from Markdown (GitHub-flavoured, tables enabled) and
+   * sanitise it before it touches the DOM.
+   *
+   * Returns null when the vendored libraries are unavailable or parsing fails,
+   * so callers fall back to plain text instead of showing raw HTML.
+   */
+  function renderMarkdown(text) {
+    if (typeof window.marked === "undefined" || typeof window.DOMPurify === "undefined") {
+      return null;
+    }
+    try {
+      const rawHtml = window.marked.parse(text, { gfm: true, breaks: true });
+      return window.DOMPurify.sanitize(rawHtml, {
+        USE_PROFILES: { html: true },
+        FORBID_TAGS: ["script", "style", "iframe", "form", "input", "button"],
+        FORBID_ATTR: ["style", "onerror", "onload", "onclick"],
+      });
+    } catch (err) {
+      console.warn("Markdown rendering failed; falling back to plain text.", err);
+      return null;
+    }
+  }
+
   function addMessage(text, who) {
     if (!chat) return null;
     const div = document.createElement("div");
     div.className = "msg " + who;
-    div.textContent = text;
+
+    // Only successful assistant answers are Markdown. User input, loaders and
+    // error bubbles stay verbatim so they can never inject markup.
+    const html = who === "ai" ? renderMarkdown(text) : null;
+    if (html !== null) {
+      div.innerHTML = html;
+      div.classList.add("markdown");
+    } else {
+      div.textContent = text;
+    }
+
     chat.appendChild(div);
     scrollBottom();
     return div;

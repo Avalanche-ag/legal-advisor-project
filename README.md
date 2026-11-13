@@ -21,6 +21,7 @@ specific section numbers — cutting down hallucination and making the system
 | **User history** | Paginated personal query history (`/api/history`) |
 | **Admin dashboard** | System metrics, user management, filterable system logs |
 | **PDF report** | Export your successful queries as a PDF transcript |
+| **Markdown answers** | GFM tables/bold/lists rendered in the chat and sanitised with DOMPurify (vendored, no CDN) |
 | **Pluggable runtime** | Swap vector store, embedding backend and LLM transport via env vars |
 
 ---
