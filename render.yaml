@@ -7,9 +7,9 @@ services:
     startCommand: "gunicorn wsgi:app --workers 1 --threads 4 --timeout 120 --max-requests 500 --max-requests-jitter 50"
     preDeployCommand: "python scripts/build_index.py --format numpy && python scripts/init_db.py"
     envVars:
-      # Pin the interpreter: scipy/torch need wheels that exist for 3.12.
-      # Without this, Render may pick 3.13+ and pip falls back to building
-      # scipy from source, which fails ("error while generating package metadata").
+      # Optional. requirements.txt now resolves on both 3.12 and 3.13
+      # (torch==2.9.0 has wheels for both), so this pin is not required.
+      # Set it only if you want a deterministic interpreter.
       - key: PYTHON_VERSION
         value: "3.12.7"
 
