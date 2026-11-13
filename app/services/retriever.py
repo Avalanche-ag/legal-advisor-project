@@ -22,7 +22,7 @@ IPC_CHROMA_PATH = str(VECTORSTORE_DIR / "ipc_chroma")
 IPC_COLLECTION = "ipc_sections"
 IPC_NUMPY_PATH = VECTORSTORE_DIR / "ipc_index.npz"
 
-BACKEND = os.getenv("VECTOR_BACKEND", "chroma").strip().lower()
+BACKEND = os.getenv("VECTOR_BACKEND", "numpy").strip().lower()
 
 FIELDS = ("section", "section_title", "chapter", "chapter_title", "content")
 

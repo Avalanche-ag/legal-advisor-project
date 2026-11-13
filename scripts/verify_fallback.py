@@ -174,6 +174,82 @@ def main() -> int:
     finally:
         generator.requests.post = original
 
+    # 9. MiniMax endpoint resolution
+    import os as _os
+
+    _os.environ.pop("MINIMAX_BASE_URL", None)
+    urls = generator._minimax_urls()
+    check(
+        "minimax default endpoints: openai first, legacy second",
+        urls[0].endswith("/v1/chat/completions") and "chatcompletion_v2" in urls[1],
+        urls,
+    )
+
+    _os.environ["MINIMAX_BASE_URL"] = "https://api.minimax.io/v1"
+    check(
+        "minimax bare base override appends /chat/completions",
+        generator._minimax_urls() == ["https://api.minimax.io/v1/chat/completions"],
+        generator._minimax_urls(),
+    )
+
+    _os.environ["MINIMAX_BASE_URL"] = "https://example.test/custom/endpoint"
+    check(
+        "minimax full URL override used verbatim",
+        generator._minimax_urls() == ["https://example.test/custom/endpoint"],
+        generator._minimax_urls(),
+    )
+    _os.environ.pop("MINIMAX_BASE_URL", None)
+
+    # 10. 404 on the primary endpoint falls through to the legacy endpoint
+    _os.environ["MINIMAX_API_KEY"] = "k"
+    seen = []
+
+    def fake_post(url, headers=None, payload=None, timeout=None):
+        seen.append(url)
+        if len(seen) == 1:
+            raise generator.EndpointNotFound(f"HTTP 404 for {url}")
+        return {"choices": [{"message": {"content": "legacy endpoint answer"}}]}
+
+    original_post = generator._post
+    generator._post = fake_post
+    try:
+        text = generator._call_minimax("system", "user")
+        check("minimax 404 falls back to legacy endpoint", text == "legacy endpoint answer", text)
+        check("minimax tried both endpoints in order", len(seen) == 2, seen)
+    finally:
+        generator._post = original_post
+
+    # 11. Request payload conforms to the OpenAI chat-completions shape
+    captured = {}
+
+    def capture_post(url, headers=None, payload=None, timeout=None):
+        captured["url"] = url
+        captured["headers"] = headers or {}
+        captured["json"] = payload or {}
+        captured["timeout"] = timeout
+        return {"choices": [{"message": {"content": "ok"}}]}
+
+    generator._post = capture_post
+    try:
+        generator._call_minimax("SYSTEM RULES", "user question")
+    finally:
+        generator._post = capture_post
+        generator._post = original_post
+
+    body = captured.get("json", {})
+    check("minimax payload has model", "model" in body, body.keys())
+    check(
+        "minimax payload messages = [system, user]",
+        [m["role"] for m in body.get("messages", [])] == ["system", "user"],
+        body.get("messages"),
+    )
+    check("minimax payload temperature present", "temperature" in body)
+    check(
+        "minimax auth header is Bearer",
+        str(captured.get("headers", {}).get("Authorization", "")).startswith("Bearer "),
+    )
+    check("minimax timeout tuple is (5, 15)", captured.get("timeout") == (5, 15), captured.get("timeout"))
+
     print("\n" + "=" * 60)
     print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
     if FAIL:

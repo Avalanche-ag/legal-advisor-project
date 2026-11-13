@@ -85,7 +85,7 @@ variables. Both variants produce equivalent behaviour.
 | Concern | Local / dev (default) | Light (free hosting) | Env var |
 |---|---|---|---|
 | Vector store | ChromaDB (HNSW) | NumPy `.npz` + cosine | `VECTOR_BACKEND=chroma\|numpy` |
-| Embeddings | sentence-transformers (torch) | onnxruntime MiniLM | `EMBEDDING_BACKEND=hf\|onnx` |
+| Embeddings | sentence-transformers (torch) | onnxruntime MiniLM *(optional)* | `EMBEDDING_BACKEND=hf\|onnx` |
 | LLM transport | — | plain HTTPS (`requests`) for all providers | always REST |
 | Database | SQLite file | MySQL | `MYSQL_*` / `DATABASE_URL` |
 
@@ -110,14 +110,13 @@ same sections ([382, 379, 411] for *"punishment for theft"*).
 
 ---
 
-### Switching embeddings back to PyTorch (hybrid profile)
+### Embeddings with PyTorch (shipped default)
 
-Keep the NumPy index and the REST LLM transport, but use
-sentence-transformers/PyTorch for embeddings:
+The deployed profile uses the NumPy index with sentence-transformers
+embeddings:
 
 ```bash
-pip install -r requirements-render-hf.txt \
-    --extra-index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements.txt      # CPU wheels via --extra-index-url
 
 export VECTOR_BACKEND=numpy
 export EMBEDDING_BACKEND=hf
@@ -193,10 +192,9 @@ So `ipc.json` is read **only when (re)building the index**; at runtime the
 ├── scripts/
 │   ├── build_index.py             # --format numpy|chroma|both
 │   ├── init_db.py                 # create tables + seed admin
-│   ├── migrate_sqlite_to_mysql.py # copy local data into MySQL
 │   └── verify_rbac.py             # 44 end-to-end checks
 ├── requirements.txt         # full local stack
-├── requirements-render.txt  # lightweight stack (~300 MB)
+├── requirements.txt         # single runtime set (CPU torch wheels)
 ├── render.yaml
 └── wsgi.py
 ```
@@ -211,7 +209,7 @@ So `ipc.json` is read **only when (re)building the index**; at runtime the
 | Auth | Flask-Login, Werkzeug password hashing |
 | Persistence | Flask-SQLAlchemy + MySQL (PyMySQL), SQLite fallback |
 | Vector store | ChromaDB, or NumPy cosine index |
-| Embeddings | `all-MiniLM-L6-v2` via sentence-transformers **or** onnxruntime |
+| Embeddings | `all-MiniLM-L6-v2` via sentence-transformers (onnxruntime optional) |
 | Generation | Groq → MiniMax → Gemini fallback chain (plain HTTP via `requests`) |
 | Reporting | ReportLab |
 | Frontend | Vanilla HTML/CSS/JS |
@@ -262,7 +260,6 @@ export MYSQL_PASSWORD=secret
 export MYSQL_DATABASE=ipc_app
 
 python scripts/init_db.py                      # create tables + admin
-python scripts/migrate_sqlite_to_mysql.py      # optional: copy existing data
 ```
 
 The URI is built as
@@ -320,24 +317,29 @@ ChromaDB folder) holding 575 embeddings, one per IPC section.
 `render.yaml` ships with the lightweight profile:
 
 ```yaml
-buildCommand:     pip install -r requirements-render.txt
+buildCommand:     pip install -r requirements.txt
 preDeployCommand: python scripts/build_index.py --format numpy && python scripts/init_db.py
 startCommand:     gunicorn wsgi:app --workers 1 --threads 4 --timeout 120 \
                               --max-requests 500 --max-requests-jitter 50
-env: VECTOR_BACKEND=numpy, EMBEDDING_BACKEND=onnx, GROQ_API_KEY / MINIMAX_API_KEY / GEMINI_API_KEY,
+env: VECTOR_BACKEND=numpy, EMBEDDING_BACKEND=hf, GROQ_API_KEY / MINIMAX_API_KEY / GEMINI_API_KEY,
      MALLOC_ARENA_MAX=2, MYSQL_*, GEMINI_API_KEY, SECRET_KEY, ADMIN_*
 ```
 
 Set `MYSQL_*` to a managed MySQL instance (see above) so users and logs
 survive deploys — Render's disk is ephemeral.
 
+**Build note:** `PYTHON_VERSION=3.12.7` is pinned in `render.yaml`. Without it,
+Render may select a newer interpreter where `scipy`/`torch` have no binary
+wheel, and pip attempts a source build — which fails with
+`error while generating package metadata`.
+
 **Memory:** the light profile peaks around 300 MB, leaving ~200 MB of headroom
 under the 512 MB free limit. If you switch back to Chroma/torch, upgrade to a
 2 GB instance.
 
 > If the service still reports memory exhaustion, check that
-> `VECTOR_BACKEND=numpy` and `EMBEDDING_BACKEND=onnx` are actually set, and that
-> the build used `requirements-render.txt` (not the full `requirements.txt`).
+> `VECTOR_BACKEND=numpy` and `EMBEDDING_BACKEND=hf` are actually set, and that
+> `PYTHON_VERSION=3.12.7` is present (scipy/torch need 3.12 wheels).
 
 ---
 

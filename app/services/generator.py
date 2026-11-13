@@ -32,6 +32,14 @@ class ProviderError(RuntimeError):
     """Raised when a single provider cannot produce an answer."""
 
 
+class EndpointNotFound(ProviderError):
+    """The URL exists but does not serve this API (404/405).
+
+    Providers such as MiniMax expose several endpoint generations; this signal
+    lets a caller try the next candidate URL instead of failing the provider.
+    """
+
+
 @dataclass
 class GenerationResult:
     """Mimics a LangChain chat message: exposes ``.content``."""
@@ -54,6 +62,8 @@ def _post(url: str, *, headers: dict, payload: dict, timeout: tuple[int, int]) -
 
     if response.status_code == 429:
         raise ProviderError("rate limited (429)")
+    if response.status_code in (404, 405):
+        raise EndpointNotFound(f"HTTP {response.status_code} for {url}")
     if response.status_code >= 400:
         raise ProviderError(f"HTTP {response.status_code}: {response.text[:160]}")
 
@@ -101,36 +111,34 @@ def _call_groq(system_prompt: str, user_prompt: str) -> str:
 
 
 # --------------------------------------------------------------------------
-# 2. MiniMax (OpenAI-compatible v2 endpoint)
+# 2. MiniMax (OpenAI-compatible /chat/completions, with legacy fallback)
 # --------------------------------------------------------------------------
-def _call_minimax(system_prompt: str, user_prompt: str) -> str:
-    api_key = os.getenv("MINIMAX_API_KEY")
-    if not api_key:
-        raise ProviderError("MINIMAX_API_KEY not configured")
+# MiniMax has shipped two API shapes. The OpenAI-compatible endpoint is
+# primary; the legacy one is attempted only when the primary returns 404/405.
+MINIMAX_ENDPOINTS = (
+    "https://api.minimax.io/v1/chat/completions",
+    "https://api.minimaxi.chat/v1/text/chatcompletion_v2",
+)
 
-    data = _post(
-        os.getenv(
-            "MINIMAX_BASE_URL", "https://api.minimaxi.chat/v1/text/chatcompletion_v2"
-        ),
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        payload={
-            "model": os.getenv("MINIMAX_MODEL", "abab6.5s"),
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "temperature": float(os.getenv("LLM_TEMPERATURE", "0.2")),
-            "max_tokens": int(os.getenv("LLM_MAX_TOKENS", "1024")),
-        },
-        timeout=(5, int(os.getenv("MINIMAX_TIMEOUT", "15"))),
-    )
 
-    # MiniMax reports application-level errors inside a 200 response.
+def _minimax_urls() -> list[str]:
+    """Resolve endpoint candidates, honouring the MINIMAX_BASE_URL override."""
+    override = (os.getenv("MINIMAX_BASE_URL") or "").strip()
+    if not override:
+        return list(MINIMAX_ENDPOINTS)
+
+    # Accept a full URL or a bare base such as "https://api.minimax.io/v1".
+    if override.rstrip("/").endswith("/v1"):
+        return [override.rstrip("/") + "/chat/completions"]
+    return [override]
+
+
+def _parse_minimax(data: dict) -> str:
+    """Standard OpenAI layout first, then MiniMax native quirks."""
     status = (data.get("base_resp") or {}).get("status_code")
     if status not in (None, 0):
-        raise ProviderError(
-            f"status_code={status} {(data.get('base_resp') or {}).get('status_msg', '')}".strip()
-        )
+        message = (data.get("base_resp") or {}).get("status_msg", "")
+        raise ProviderError(f"status_code={status} {message}".strip())
 
     try:
         return _openai_content(data)
@@ -139,6 +147,38 @@ def _call_minimax(system_prompt: str, user_prompt: str) -> str:
         if reply:
             return str(reply).strip()
         raise
+
+
+def _call_minimax(system_prompt: str, user_prompt: str) -> str:
+    api_key = os.getenv("MINIMAX_API_KEY")
+    if not api_key:
+        raise ProviderError("MINIMAX_API_KEY not configured")
+
+    payload = {
+        "model": os.getenv("MINIMAX_MODEL", "abab6.5s"),
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": float(os.getenv("LLM_TEMPERATURE", "0.2")),
+        "max_tokens": int(os.getenv("LLM_MAX_TOKENS", "1024")),
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    timeout = (5, int(os.getenv("MINIMAX_TIMEOUT", "15")))
+
+    last_error: Exception | None = None
+    for url in _minimax_urls():
+        try:
+            return _parse_minimax(_post(url, headers=headers, payload=payload, timeout=timeout))
+        except EndpointNotFound as exc:
+            logger.info("MiniMax endpoint unavailable (%s); trying next", exc)
+            last_error = exc
+            continue
+
+    raise ProviderError(f"no MiniMax endpoint responded ({last_error})")
 
 
 # --------------------------------------------------------------------------
